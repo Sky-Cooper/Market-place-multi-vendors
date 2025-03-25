@@ -138,23 +138,23 @@ class CartOrderSerializer(serializers.ModelSerializer):
             "total_payed",
         ]
 
-    def validate(self, data):
-        user = self.context["request"].user
-        if not hasattr(user, "client"):
-            raise serializers.ValidationError("this user has no client account")
+    # def validate(self, data):
+    #     user = self.context["request"].user
+    #     if not hasattr(user, "client"):
+    #         raise serializers.ValidationError("this user has no client account")
 
-        data["client"] = user.client
+    #     data["client"] = user.client
 
-        return data
+    #     return data
 
-    def create(self, validated_data):
-        user = self.context["request"].user
-        if not hasattr(user, "client"):
-            raise serializers.ValidationError("this user has no client account")
+    # def create(self, validated_data):
+    #     user = self.context["request"].user
+    #     if not hasattr(user, "client"):
+    #         raise serializers.ValidationError("this user has no client account")
 
-        validated_data["client"] = user.client
+    #     validated_data["client"] = user.client
 
-        return super().create(validated_data)
+    #     return super().create(validated_data)
 
 
 class CartOrderItemSerializer(serializers.ModelSerializer):
@@ -311,69 +311,23 @@ class CartItemSerializer(serializers.ModelSerializer):
 
 class GlobalOrderSerializer(serializers.ModelSerializer):
     gid = serializers.ReadOnlyField()
-    user = serializers.HiddenField(default=serializers.CurrentUserDefault())
 
     class Meta:
         model = GlobalOrder
-        fields = ["gid", "shopping_cart", "user"]
-        read_only_fields = ["gid", "user"]
+        fields = ["gid", "shopping_cart"]
+        read_only_fields = ["gid", "shopping_cart"]
 
-    def validate_user(self, value):
+    def create(self, value):
         user = self.context["request"].user
         if not hasattr(user, "client"):
             raise serializers.ValidationError("this user has no client account !")
 
-        if not ShoppingCart.objects.filter(client=user.client).exists():
-            raise serializers.ValidationError("this client has no shopping cart !!")
-
-        return user
-
-    def create(self, validated_data):
-        user = self.context["request"].user
-        shopping_cart = validated_data["shopping_cart"]
-        cart_items = CartItem.objects.filter(shopping_cart=shopping_cart)
-        client = user.client
-
-        vendors = {}
-
-        for cart_item in cart_items:
-            vendor = cart_item.product.vendor
-            if vendor not in vendors:
-                vendors[vendor] = []
-
-            vendors[vendor].append(cart_item)
+        try:
+            shopping_cart = ShoppingCart.objects.get(client=user.client)
+        except ShoppingCart.DoesNotExist:
+            raise serializers.ValidationError("this client has no shopping cart.")
 
         global_order = GlobalOrder.objects.create(shopping_cart=shopping_cart)
-
-        for vendor, cart_items in vendors.items():
-
-            total_payed = sum(
-                cart_item.product.price * cart_item.quantity for cart_item in cart_items
-            )
-
-            cart_order = CartOrder.objects.create(
-                client=client,
-                vendor=vendor,
-                total_payed=total_payed,
-                paid_status=True,
-                payment_method="online",
-                global_order=global_order,
-            )
-
-            cart_order.save()
-            print(f"Created CartOrder: {cart_order}")
-
-            for cart_item in cart_items:
-                cart_order_item = CartOrderItem.objects.create(
-                    order=cart_order,
-                    cart_item=cart_item,
-                    quantity=cart_item.quantity,
-                    total_payed=cart_item.product.price * cart_item.quantity,
-                )
-
-                print(f"Created CartOrderItem for CartOrder ID: {cart_order.id}")
-                cart_order_item.save()
-
         return global_order
 
 

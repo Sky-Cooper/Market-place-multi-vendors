@@ -14,10 +14,12 @@ from .serializers import (
     SubCategorySerializer,
     GlobalOrderSerializer,
 )
-from rest_framework import viewsets, permissions
+from rest_framework import viewsets, permissions, status
+from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.exceptions import ValidationError
-
+from rest_framework.response import Response
+from rest_framework.viewsets import ViewSet
 
 # Create your views here.
 
@@ -148,13 +150,91 @@ class CartItemViewSet(viewsets.ModelViewSet):
     # notify the client incase they forgot a product in the wishlist or in the shoppingcart incase the product is getting to be out of stock
 
 
-class GlobalCartViewset(viewsets.ModelViewSet):
-    queryset = GlobalOrder.objects.all()
-    serializer_class = GlobalOrderSerializer
+class GlobalCartViewset(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+    def post(self, request):
+        serializer = GlobalOrderSerializer(
+            data=request.data, context={"request": request}
+        )
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        global_order = serializer.save()
+        user = request.user
+        client = user.client
+        shopping_cart = global_order.shopping_cart
+
+        cart_items = CartItem.objects.filter(shopping_cart=shopping_cart)
+        if len(cart_items) < 1:
+            return Response({"error": "there is no cart item for this shopping cart"})
+
+        print(f"number of cart items is : !!!!!!!! {cart_items.count()}")
+
+        vendors = {}
+
+        for cart_item in cart_items:
+            vendor = cart_item.product.vendor
+            if vendor not in vendors:
+                vendors[vendor] = []
+
+            vendors[vendor].append(cart_item)
+
+        cart_orders = []
+
+        try:
+            for vendor, cart_items in vendors.items():
+
+                total_payed = sum(
+                    cart_item.product.price * cart_item.quantity
+                    for cart_item in cart_items
+                )
+
+                cart_order = CartOrder.objects.create(
+                    client=client,
+                    vendor=vendor,
+                    total_payed=total_payed,
+                    paid_status=True,
+                    payment_method="online",
+                    global_order=global_order,
+                )
+
+                cart_order.save()
+
+                print(f"here is the cart_order id : {cart_order.oid}")
+
+                print(f"Created CartOrder: {cart_order}")
+                cart_orders.append(cart_order)
+
+                for cart_item in cart_items:
+                    CartOrderItem.objects.create(
+                        client=client,
+                        order=cart_order,
+                        cart_item=cart_item,
+                        quantity=cart_item.quantity,
+                        total_payed=cart_item.product.price * cart_item.quantity,
+                        product=cart_item.product,
+                    )
+
+                    print(f"Created CartOrderItem for CartOrder ID: {cart_order.id}")
+
+        except Exception as e:
+            raise e
+
+        return Response(
+            {
+                "message": "global cart order is successfully created and implemented",
+                "global_cart_id": global_order.id,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def get(self, request, *args, **kwargs):
+        global_orders = GlobalOrder.objects.all()
+        serializer = GlobalOrderSerializer(
+            global_orders, many=True, context={"request": request}
+        )
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class SubCategory(viewsets.ModelViewSet):

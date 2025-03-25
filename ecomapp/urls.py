@@ -30,7 +30,8 @@ router.register("shopping-carts", ShoppingCartViewSet, basename="shopping-cart")
 router.register("cart-items", CartItemViewSet, basename="cart-item")
 router.register("vendor/register", VendorViewSet, basename="vendor-register")
 router.register("client/register", ClientViewSet, basename="client-register")
-router.register("global/order", GlobalCartViewset, basename="global-order")
+# router.register("global-order", GlobalCartViewset, basename="global-order")
 urlpatterns = [
     path("", include(router.urls)),
+    path("global-order/", GlobalCartViewset.as_view(), name="global-order"),
 ]

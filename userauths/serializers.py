@@ -19,15 +19,17 @@ class UserSerializer(serializers.ModelSerializer):
         extra_kwargs = {"password": {"write_only": True}}
 
     def create(self, validated_data):
-        password = validated_data.pop("password", None)
-        user = User.objects.create_user(password=password, **validated_data)
+        password = validated_data.pop("password")
+        user = User(**validated_data)
+        user.set_password(password)
+        user.save()
         return user
 
 
 class VendorSerializer(serializers.ModelSerializer):
     vid = serializers.ReadOnlyField()
     image_url = serializers.SerializerMethodField()
-    user = serializers.HiddenField(default=serializers.CurrentUserDefault())
+    user = UserSerializer()
 
     class Meta:
         model = Vendor
@@ -45,24 +47,30 @@ class VendorSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["chat_response_time", "average rating", "vid"]
 
+    def create(self, validated_data):
+        if validated_data:
+            user_data = validated_data.pop("user")
+            password = user_data.pop("password")
+            user = User(**user_data)
+            user.set_password(password)
+            user.save()
+            try:
+                vendor = Vendor.objects.create(user=user, **validated_data)
+
+            except Exception as e:
+                user.delete()
+                raise serializers.ValidationError(f"exception : {e}")
+
+            return vendor
+
     def get_image_url(self, obj):
         request = self.context.get("request")
         return request.build_absolute_uri(obj.image.url) if obj.image else None
 
-    def validate_user(self, value):
-        user = self.context["request"].user
-
-        if hasattr(user, "vendor"):
-            raise serializers.ValidationError(
-                "you have already created a vendor profile"
-            )
-
-        return value
-
 
 class ClientSerializer(serializers.ModelSerializer):
     cid = serializers.ReadOnlyField()
-    user = serializers.HiddenField(default=serializers.CurrentUserDefault())
+    user = UserSerializer()
 
     class Meta:
         model = Client
@@ -70,12 +78,11 @@ class ClientSerializer(serializers.ModelSerializer):
         fields = ["cid", "user", "list_of_interest", "is_active", "is_banned"]
         read_only_fields = ["cid", "is_active", "is_banned"]
 
-    def validate_user(self, value):
-        user = self.context["request"].user
-
-        if hasattr(user, "client"):
-            raise serializers.ValidationError(
-                "you have already created a client profile"
-            )
-
-        return value
+    def create(self, validated_data):
+        user_data = validated_data.pop("user")
+        password = user_data.pop("password")
+        user = User(**user_data)
+        user.set_password(password)
+        user.save()
+        client = Client.objects.create(user=user, **validated_data)
+        return client

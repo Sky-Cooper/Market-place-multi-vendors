@@ -26,7 +26,7 @@ class UserRoles(models.TextChoices):
 
 
 class ApplicationUserManager(BaseUserManager):
-    def create_user(self, email, password=None, **extra_fields):
+    def create_user(self, email, password, **extra_fields):
         if not email:
             raise ValueError("The email field must be set")
 
@@ -38,36 +38,16 @@ class ApplicationUserManager(BaseUserManager):
         if password is None:
             raise ValueError("the password must be provided!!")
 
-        if password:
-            user.set_password(password)
+        user.set_password(password)
 
         user.save(using=self._db)
 
-        # if role == UserRoles.CLIENT:
-        #     Client.objects.create(user=user)
-
-        # elif role == UserRoles.VENDOR:
-        #     required_fields = ["title", "address", "contact", "image"]
-        #     missing_fields = [
-        #         field for field in required_fields if field not in extra_fields
-        #     ]
-        #     if missing_fields:
-        #         raise ValueError(
-        #             f"the vendor did not fill the required fields , make sure to fill {', '.join(missing_fields)}"
-        #         )
-
-        #     Vendor.objects.create(
-        #         user=user,
-        #         title=extra_fields.get("title", ""),
-        #         address=extra_fields.get("address", ""),
-        #         contact=extra_fields.get("contact", ""),
-        #         image=extra_fields.get("image", None),
-        #         description=extra_fields.get("description", ""),
-        #         shipping_time=extra_fields.get("shipping_time", None),
-        #         guarantee_period=extra_fields.get("guarantee_period", "No guarantee"),
-        #     )
-
         return user
+
+    def create_superuser(self, email, password, **extra_fields):
+        extra_fields.setdefault("is_superuser", True)
+        extra_fields.setdefault("is_staff", True)
+        return self.create_user(email, password, **extra_fields)
 
 
 class User(AbstractUser):
@@ -110,7 +90,6 @@ class Vendor(models.Model):
         prefix="ven_",
         alphabet="abcdefghijklmn12345",
     )
-
     title = models.CharField(max_length=128)
     description = models.TextField(null=True, blank=True)
     image = models.ImageField(upload_to=user_directory_path)
