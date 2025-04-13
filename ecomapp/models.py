@@ -34,7 +34,7 @@ RATING_CHOICES = (
 )
 
 
-PEYMENT_CHOICES = (("cod", "Cash on delivery"), ("online", "Online"))
+PAYMENT_CHOICES = (("cod", "Cash on delivery"), ("online", "Online"))
 
 
 class Category(models.Model):
@@ -63,7 +63,6 @@ class Category(models.Model):
 
 class SubCategory(models.Model):
     scid = ShortUUIDField(unique=True, length=10, max_length=20, prefix="subcat_")
-
     title = models.CharField(max_length=128)
     description = models.TextField()
     image = models.ImageField(upload_to="subcategories/")
@@ -72,14 +71,6 @@ class SubCategory(models.Model):
     category = models.ForeignKey(
         Category, on_delete=models.CASCADE, related_name="sub_categories"
     )
-
-
-class Dashboard(models.Model):
-    vendor = models.ForeignKey(
-        Vendor, on_delete=models.CASCADE, related_name="dashboard"
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-    pass
 
 
 class Product(models.Model):
@@ -117,6 +108,7 @@ class Product(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     discount_percentage = models.PositiveIntegerField(default=0)
     quantity = models.PositiveIntegerField(default=1, blank=False)
+    potential_delivery_days = models.PositiveBigIntegerField(blank=True, null=True)
 
     class Meta:
         verbose_name_plural = "Products"
@@ -176,7 +168,7 @@ class ProductReview(models.Model):
 
     def __str__(self):
 
-        return f"{self.user.username} - {self.product.title} - {self.comment} - {self.rating}"
+        return f"{self.client.user.username} - {self.product.title} - {self.comment} - {self.rating}"
 
 
 class Wishlist(models.Model):
@@ -190,23 +182,31 @@ class Wishlist(models.Model):
     client = models.OneToOneField(
         Client, on_delete=models.CASCADE, related_name="wishlist"
     )
-    products = models.ManyToManyField(Product, related_name="wishlists")
+    products = models.ManyToManyField(
+        Product,
+        related_name="wishlists",
+        null=True,
+        blank=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         verbose_name_plural = "wishlists"
 
     def __str__(self):
-        return f"wish list of {self.user.username}"
+        return f"wish list of {self.client.user.username}"
 
 
 class Address(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="addresses")
     address = models.CharField(max_length=524, blank=False)
-    status = models.BooleanField(default=False)
+    status = models.BooleanField(default=True)
 
     class Meta:
         verbose_name_plural = "Addresses"
+
+    def __str__(self):
+        return f"address for {self.user.get_full_name()}"
 
 
 class ShoppingCart(models.Model):
@@ -217,7 +217,7 @@ class ShoppingCart(models.Model):
         prefix="cart_",
         alphabet="abcdefghijklmn12345",
     )
-    client = models.ForeignKey(
+    client = models.OneToOneField(
         Client, on_delete=models.CASCADE, related_name="shopping_cart"
     )
     created_at = models.DateTimeField(auto_now_add=True)
@@ -227,7 +227,7 @@ class ShoppingCart(models.Model):
         verbose_name_plural = "Shopping Carts"
 
     def __str__(self):
-        return f"Shopping cart of {self.client.user.username}"
+        return f"Shopping cart of {self.client.user.get_full_name()}"
 
 
 class CartItem(models.Model):
@@ -299,8 +299,9 @@ class CartOrder(models.Model):
     order_status = models.CharField(
         max_length=20, choices=STATUS_CHOICES, default="processing"
     )
+    is_canceled = models.BooleanField(default=False)
     payment_method = models.CharField(
-        max_length=20, choices=PEYMENT_CHOICES, blank=False
+        max_length=20, choices=PAYMENT_CHOICES, default="cod"
     )
 
     global_order = models.ForeignKey(
@@ -333,10 +334,14 @@ class CartOrderItem(models.Model):
     facture = models.CharField(max_length=524, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    is_delivered = models.BooleanField(default=False)
+    cart_order_item_status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default="processing"
+    )
     product = models.ForeignKey(
         Product, on_delete=models.CASCADE, related_name="cart_order_items"
     )  # i ll make sure to create a whole system that manage the delivery taking in consideration the exceptions that could happen due fraud or scam
+    potential_delivery_days = models.PositiveBigIntegerField(null=True, blank=True)
+    is_canceled = models.BooleanField(default=False)
 
     class Meta:
         verbose_name_plural = "Cart Order Items"
@@ -348,22 +353,26 @@ class CartOrderItem(models.Model):
         if self.cart_item:
             self.quantity = self.cart_item.quantity
 
+        potential_delivery_days_product = self.cart_item.product.potential_delivery_days
+        if potential_delivery_days_product is not None:
+            self.potential_delivery_days = potential_delivery_days_product
+
         super().save(*args, **kwargs)
 
 
-class OrderConfirmationVendor(models.Model):
-    is_confirmed = models.BooleanField(default=False)
-    cart_order_item = models.OneToOneField(
-        CartOrderItem, on_delete=models.CASCADE, related_name="confirmation"
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    countdown = models.DateTimeField(null=True, blank=True)
+# class OrderConfirmationVendor(models.Model):
+#     is_confirmed = models.BooleanField(default=False)
+#     cart_order_item = models.OneToOneField(
+#         CartOrderItem, on_delete=models.CASCADE, related_name="confirmation"
+#     )
+#     created_at = models.DateTimeField(auto_now_add=True)
+#     updated_at = models.DateTimeField(auto_now=True)
+#     countdown = models.DateTimeField(null=True, blank=True)
 
-    def save(self, *args, **kwargs):
-        if not self.countdown:
-            self.countdown = self.created_at + timedelta(days=2)
-        super().save(*args, **kwargs)
+#     def save(self, *args, **kwargs):
+#         if not self.countdown:
+#             self.countdown = self.created_at + timedelta(days=2)
+#         super().save(*args, **kwargs)
 
-    def __str__(self):
-        return f"status  - {self.is_confirmed} - cart order item : {self.cart_order_item.cart_item.product} "
+#     def __str__(self):
+#         return f"status  - {self.is_confirmed} - cart order item : {self.cart_order_item.cart_item.product} "

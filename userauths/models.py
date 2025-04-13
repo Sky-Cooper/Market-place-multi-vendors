@@ -5,24 +5,17 @@ from django.utils.html import mark_safe
 
 
 def user_directory_path(instance, filename):
-    vendor_id = getattr(instance, "vendor", None)
-    return f"user_{vendor_id.vid if vendor_id else 'unknown'}/{filename}"
+    try:
+        vid = instance.vendor.vid
+    except AttributeError:
+        vid = "unknown"
+    return f"user_{vid}/{filename}"
 
 
 class UserRoles(models.TextChoices):
-    CLIENT = (
-        "client",
-        "Client",
-    )
-    VENDOR = (
-        "vendor",
-        "Vendor",
-    )
-    ADMIN = (
-        "admin",
-        "admin",
-    )
-    SUPERADMIN = "superadmin", "Superadmin"
+    SUPER_ADMIN = "SUPER_ADMIN", "Super Admin"
+    VENDOR = "VENDOR", "Vendor"
+    CLIENT = "CLIENT", "Client"
 
 
 class ApplicationUserManager(BaseUserManager):
@@ -47,12 +40,14 @@ class ApplicationUserManager(BaseUserManager):
     def create_superuser(self, email, password, **extra_fields):
         extra_fields.setdefault("is_superuser", True)
         extra_fields.setdefault("is_staff", True)
+        extra_fields.setdefault("role", UserRoles.SUPER_ADMIN)
         return self.create_user(email, password, **extra_fields)
 
 
 class User(AbstractUser):
     uid = ShortUUIDField(unique=True, length=10, max_length=20, prefix="u_")
     email = models.EmailField(unique=True, blank=False)
+    role = models.CharField(max_length=20, choices=UserRoles.choices)
     username = models.CharField(max_length=100, unique=True, blank=False)
     first_name = models.CharField(max_length=100, blank=False)
     last_name = models.CharField(max_length=100, blank=False)
@@ -67,11 +62,15 @@ class User(AbstractUser):
     def __str__(self):
         return self.username
 
+    def get_full_name(self):
+        return f"{self.first_name} {self.last_name} "
+
 
 class Client(models.Model):
     cid = ShortUUIDField(unique=True, max_length=20, length=10, prefix="cli_")
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="client")
     list_of_interest = models.JSONField(default=list)
+    # TODO make sure that list of interest should be a separate model
     is_active = models.BooleanField(default=True)
     is_banned = models.BooleanField(default=False)
 

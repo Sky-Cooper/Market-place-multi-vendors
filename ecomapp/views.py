@@ -15,11 +15,19 @@ from .serializers import (
     GlobalOrderSerializer,
 )
 from rest_framework import viewsets, permissions, status
+
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import ValidationError, PermissionDenied
 from rest_framework.response import Response
 from rest_framework.viewsets import ViewSet
+from userauths.models import *
+from userauths.permissions import (
+    IsOwnerOrSuperAdmin,
+    RoleBasedQuerysetMixin,
+    IsVendorOrClient,
+)
+
 
 # Create your views here.
 
@@ -27,28 +35,46 @@ from rest_framework.viewsets import ViewSet
 class CategoryViewSet(viewsets.ModelViewSet):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
-    permission_classes = [permissions.IsAdminUser]
     parser_classes = [MultiPartParser, FormParser]
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [permissions.AllowAny()]
+        return [permissions.IsAuthenticated()]
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        if not user.is_superuser:
+            raise ValidationError("only super users who can create categories")
+
+    def perform_update(self, serializer):
+        user = self.request.user
+        if not user.is_superuser:
+            raise ValidationError("only super users who can update categories")
+
+    def perform_destroy(self, instance):
+        user = self.request.user
+        if not user.is_superuser:
+            raise ValidationError("only super users who can delete a category")
 
 
 class ProductViewSet(viewsets.ModelViewSet):
     queryset = Product.objects.all()
     serializer_class = ProductSerializer
-    permission_classes = [permissions.IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [permissions.AllowAny()]
+        return [permissions.IsAuthenticated()]
 
     def perform_create(self, serializer):
 
         user = self.request.user
 
-        try:
-            vendor = user.vendor
-
-        except Vendor.DoesNotExist:
-            raise ValidationError(
-                "there is no vender related to the current logged in  user : "
-            )
-
+        if not hasattr(user, "vendor"):
+            raise ValidationError("No vendor is linked to this user.")
+        vendor = user.vendor
         serializer.save(vendor=vendor)
 
     def perform_update(self, serializer):
@@ -58,13 +84,10 @@ class ProductViewSet(viewsets.ModelViewSet):
             serializer.save()
             return
 
-        try:
-            vendor = user.vendor
+        if not hasattr(user, "vendor"):
+            raise ValidationError("No vendor is linked to this user.")
 
-        except Vendor.DoesNotExist:
-            raise ValidationError(
-                "there is no vender related to the current logged in user : "
-            )
+        vendor = user.vendor
 
         product = serializer.instance
 
@@ -73,52 +96,159 @@ class ProductViewSet(viewsets.ModelViewSet):
                 "you cannot update this product because it belongs to another vendor"
             )
 
-        serializer.save()
+        serializer.save(vendor=vendor)
+
+    def perform_destroy(self, instance):
+        user = self.request.user
+        if user.is_superuser:
+            return instance.delete()
+
+        if not hasattr(user, "vendor"):
+            raise ValidationError("only vendors who can delete the products")
+
+        if instance.vendor != user.vendor:
+            raise ValidationError(
+                "you are not the owner of this product , you dont have the permission to delete it"
+            )
+
+        instance.delete()
 
 
 class ProductImagesViewSet(viewsets.ModelViewSet):
     queryset = ProductImages.objects.all()
     serializer_class = ProductImagesSerializer
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [permissions.AllowAny()]
+        return [permissions.IsAuthenticated()]
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        if not hasattr(user, "vendor"):
+            raise ValidationError("only vendors who can perform this operations")
+
+        vendor = user.vendor
+
+        product = serializer.validated_data.get("product")
+        if product.vendor != vendor:
+            raise ValidationError("you are not the owner of this product")
+        serializer.save()
+
+    def perform_update(self, serializer):
+        user = self.request.user
+        if not hasattr(user, "vendor"):
+            raise ValidationError("only vendors who can perform this operation")
+        vendor = user.vendor
+        product = serializer.validated_data.get("product")
+        if product.vendor != vendor:
+            raise ValidationError("you are not the owner of this product")
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        user = self.request.user
+        if user.is_superuser:
+            return instance.delete()
+
+        if not hasattr(user, "vendor"):
+            raise ValidationError("only vendors who can delete product images")
+
+        if instance.vendor != user.vendor:
+            raise ValidationError(
+                "you dont have the permission in order to delete this product image"
+            )
+
+        instance.delete()
+
+
+class CartOrderViewSet(viewsets.ModelViewSet):
+    serializer_class = CartOrderSerializer
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
 
     def perform_create(self, serializer):
         serializer.save()
 
+    def get_queryset(self):
+        user = self.request.user
+        if hasattr(user, "client"):
+            return CartOrder.objects.filter(client=user.client)
 
-class CartOrderViewSet(viewsets.ModelViewSet):
-    queryset = CartOrder.objects.all()
-    serializer_class = CartOrderSerializer
-    permission_classes = [permissions.IsAuthenticated]
-    parser_classes = [MultiPartParser, FormParser]
+        if hasattr(user, "vendor"):
+            return CartOrder.objects.filter(vendor=user.vendor)
+        if user.is_superuser:
+            return CartOrder.objects.all()
 
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        return CartOrder.objects.none()
 
 
 class CartOrderItemViewSet(viewsets.ModelViewSet):
     queryset = CartOrderItem.objects.all()
     serializer_class = CartOrderItemSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsVendorOrClient]
     # logically speaking if i understand , the cartorderviewset get created after the client payed the full price it should be created multiple cartorder depending on how many different vendors , and in each cartorder it should create caartorderitems
+
+    def perform_create(self, serializer):
+        serializer.save()
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser:
+            return CartOrderItem.objects.all()
+        if hasattr(user, "vendor"):
+            return CartOrderItem.objects.filter(order__vendor=user.vendor)
+
+        if hasattr(user, "client"):
+            return CartOrderItem.objects.filter(order__client=user.client)
 
 
 class ProductReviewViewSet(viewsets.ModelViewSet):
     queryset = ProductReview.objects.all()
     serializer_class = ProductReviewSerializer
-    permission_classes = [permissions.IsAuthenticated]
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [permissions.AllowAny]
+        return [permissions.IsAuthenticated()]
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        user = self.request.user
+        if not hasattr(user, "client"):
+            raise ValidationError("only clients who can create reviews")
+        serializer.save(client=user.client)
+
+    def perform_destroy(self, instance):
+        user = self.request.user
+        if not hasattr(user, "client"):
+            raise PermissionDenied("this user has no client account")
+
+        if user.client != instance.client:
+            raise PermissionDenied(
+                "you are not the owner of this review , you cannot delete it"
+            )
+
+        instance.delete()
 
 
 class WishlistViewSet(viewsets.ModelViewSet):
     queryset = Wishlist.objects.all()
     serializer_class = WishlistSerializer
-    permissions_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser:
+            return Wishlist.objects.all()
+        if hasattr(user, "client"):
+            return Wishlist.objects.filter(client=user.client)
+        return Wishlist.objects.none()
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        user = self.request.user
+        if not hasattr(user, "client"):
+            raise PermissionDenied("only clients who can have a wish list")
+        serializer.save(client=self.request.user)
 
         # create a wish list right after the user is signed up
 
@@ -126,22 +256,60 @@ class WishlistViewSet(viewsets.ModelViewSet):
 class AddressViewSet(viewsets.ModelViewSet):
     queryset = Address.objects.all()
     serializer_class = AddressSerializer
-    permissions_classes = [permissions.IsAuthenticated]
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [permissions.AllowAny]
+        return [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser:
+            return Address.objects.all()
+        return Address.objects.filter(user=user)
+
+    def perform_destroy(self, instance):
+        user = self.request.user
+        if user != instance.user:
+            raise PermissionDenied("you are not the owner of this adress")
 
 
 class ShoppingCartViewSet(viewsets.ModelViewSet):
     queryset = ShoppingCart.objects.all()
     serializer_class = ShoppingCartSerializer
-    permissions_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser:
+            return ShoppingCart.objects.all()
+
+        if not hasattr(user, "client"):
+            raise PermissionDenied("only clients who can get their shopping cart")
+        return ShoppingCart.objects.filter(client=user.client)
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        serializer.save(client=self.request.user.client)
 
 
 class CartItemViewSet(viewsets.ModelViewSet):
-    queryset = CartItem.objects.all()
     serializer_class = CartItemSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if hasattr(user, "client") and hasattr(user.client, "shopping_cart"):
+            return CartItem.objects.filter(shopping_cart=user.client.shopping_cart)
+        if user.role == UserRoles.SUPER_ADMIN:
+            return CartItem.objects.all()
+        return CartItem.objects.none()
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        if not hasattr(user, "client"):
+            raise PermissionDenied("only clients can add items to the cart.")
+        shopping_cart = user.client.shopping_cart
+        serializer.save(shopping_cart=shopping_cart)
 
     # feature : use signals in order to track weather or not the product is out of stock , if so , deleted it from the shopping cart , cart item and the ordercartitem
     # document on how to integrate signals to acheive that
@@ -162,6 +330,8 @@ class GlobalCartViewset(APIView):
 
         global_order = serializer.save()
         user = request.user
+        if not hasattr(user, "client"):
+            raise ValidationError("only clients who have the permission to buy")
         client = user.client
         shopping_cart = global_order.shopping_cart
 
@@ -217,6 +387,7 @@ class GlobalCartViewset(APIView):
                     )
 
                     print(f"Created CartOrderItem for CartOrder ID: {cart_order.id}")
+                    # TODO : make sure to use signals in order to inform the vendors and send updates in their email
 
         except Exception as e:
             raise e

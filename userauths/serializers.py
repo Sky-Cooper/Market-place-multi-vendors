@@ -16,6 +16,7 @@ class UserSerializer(serializers.ModelSerializer):
             "last_name",
             "bio",
         ]
+        read_only_fields = ["role"]
         extra_kwargs = {"password": {"write_only": True}}
 
     def create(self, validated_data):
@@ -24,6 +25,12 @@ class UserSerializer(serializers.ModelSerializer):
         user.set_password(password)
         user.save()
         return user
+
+    def update(self, instance, validated_data):
+        request = self.context.get("request")
+        if "role" in validated_data and not request.user.is_superuser:
+            raise PermissionError("only super users can update role")
+        return super().update(instance, validated_data)
 
 
 class VendorSerializer(serializers.ModelSerializer):
@@ -46,6 +53,12 @@ class VendorSerializer(serializers.ModelSerializer):
             "guarantee_period",
         ]
         read_only_fields = ["chat_response_time", "average rating", "vid"]
+
+    def validate(self, data):
+        user = self.context["request"].user
+        if hasattr(user, "client") or hasattr(user, "vendor") or user.is_superuser:
+            raise serializers.ValidationError("this user is already linked")
+        return data
 
     def create(self, validated_data):
         if validated_data:
@@ -77,6 +90,12 @@ class ClientSerializer(serializers.ModelSerializer):
 
         fields = ["cid", "user", "list_of_interest", "is_active", "is_banned"]
         read_only_fields = ["cid", "is_active", "is_banned"]
+
+    def validate(self, data):
+        user = self.context["request"].user
+        if hasattr(user, "client") or hasattr(user, "vendor") or user.is_superuser:
+            raise serializers.ValidationError("this user is already linked")
+        return data
 
     def create(self, validated_data):
         user_data = validated_data.pop("user")

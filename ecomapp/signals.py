@@ -1,6 +1,6 @@
 from django.db.models.signals import post_save, pre_delete, post_delete, pre_save
 from django.dispatch import receiver
-from .models import *
+from .models import Product, CartItem, CartOrderItem, ShoppingCart, Wishlist
 from django.core.exceptions import ValidationError
 from userauths.models import User, Vendor, Client
 
@@ -18,21 +18,20 @@ def check_stock(sender, instance, **kwargs):
             cart_item.save(update_fields=["is_active"])
 
 
-@receiver(post_save, sender=OrderConfirmationVendor)
+@receiver(post_save, sender=CartOrderItem)
 def reduce_stock_after_vendor_confirmation(sender, instance, **kwargs):
     if instance.is_confirmed:
-        instance.cart_order_item.cart_item.product.quantity -= (
-            instance.cart_order_item.quantity
-        )
-        instance.cart_order_item.cart_item.product.save(update_fields=["quantity"])
+        instance.cart_item.product.quantity -= instance.quantity
+        instance.cart_item.product.save(update_fields=["quantity"])
 
-    elif not instance.is_confirmed and instance.countdown is None:
-        instance.cart_order_item.cart_item.is_active = True
-        instance.cart_order_item.cart_item.product.quantity += (
-            instance.cart_order_item.quantity
-        )
-        instance.cart_order_item.cart_item.save(update_fields=["is_active"])
-        instance.cart_order_item.cart_item.product.save(update_fields=["quantity"])
+    # elif not instance.is_confirmed and instance.countdown is None:
+    #     instance.cart_order_item.cart_item.is_active = True
+    #     instance.cart_order_item.cart_item.product.quantity += (
+    #         instance.cart_order_item.quantity
+    #     )
+    #     instance.cart_order_item.cart_item.save(update_fields=["is_active"])
+    #     instance.cart_order_item.cart_item.product.save(update_fields=["quantity"])
+    # TODO make sure to integrate the ai to generate bills or call back in their email
 
 
 # @receiver(post_save, sender=CartOrderItem)
@@ -54,24 +53,23 @@ def reduce_stock_after_vendor_confirmation(sender, instance, **kwargs):
 #         instance.save(update_fields=["total_payed"])
 
 
-@receiver(pre_save, sender=CartItem)
-def check_stock_availability(sender, instance, **kwargs):
-    if instance.product.quantity < instance.quantity:
-        raise ValidationError(
-            "the quantity exceed the available stock , please adjust and lower the quantity !"
-        )
+# @receiver(pre_save, sender=CartItem)
+# def check_stock_availability(sender, instance, **kwargs):
+#     if instance.product.quantity < instance.quantity:
+#         raise ValidationError(
+#             "the quantity exceed the available stock , please adjust and lower the quantity !"
+#         )
 
 
-@receiver(pre_save, sender=CartItem)
-def check_item_duplication(sender, instance, **kwargs):
-    shopping_cart = instance.shopping_cart
-    product = instance.product
-    if (
-        CartItem.objects.filter(shopping_cart=shopping_cart, product=product)
-        .exclude(pk=instance.pk)
-        .exists()
-    ):
-        raise ValidationError("the product exist already in your shopping cart")
+# @receiver(pre_save, sender=CartItem)
+# def check_item_duplication(sender, instance, **kwargs):
+
+#     if (
+#         CartItem.objects.filter(shopping_cart=instance.shopping_cart, product=instance.product)
+#         .exclude(pk=instance.pk)
+#         .exists()
+#     ):
+#         raise ValidationError("the product exist already in your shopping cart")
 
 
 # @receiver(post_save, sender=CartOrder)
@@ -120,28 +118,29 @@ def check_cart_item_existence(sender, instance, **kwargs):
 #         raise ValidationError("The order cannot have more than one vendor !!")
 
 
-@receiver(pre_save, sender=Client)
-def check_client_existence(sender, instance, **kwargs):
-    user = instance.user
-    clients_objects = Client.objects.filter(user=user)
+# @receiver(pre_save, sender=Client)
+# def check_client_existence(sender, instance, **kwargs):
+#     user = instance.user
+#     clients_objects = Client.objects.filter(user=user)
 
-    if clients_objects.count() > 1:
-        raise ValidationError("this user is already related to an existing client")
+#     if clients_objects.count() > 1:
+#         raise ValidationError("this user is already related to an existing client")
 
 
-@receiver(pre_save, sender=Vendor)
-def check_vendor_existence(sender, instance, **kwargs):
-    user = instance.user
-    vendor_objects = Vendor.objects.filter(user=user)
+# @receiver(pre_save, sender=Vendor)
+# def check_vendor_existence(sender, instance, **kwargs):
+#     user = instance.user
+#     vendor_objects = Vendor.objects.filter(user=user)
 
-    if vendor_objects.count() > 1:
-        raise ValidationError("this user is already related to an existing vendor")
+#     if vendor_objects.count() > 1:
+#         raise ValidationError("this user is already related to an existing vendor")
 
 
 @receiver(post_save, sender=Client)
-def create_shopping_cart(sender, instance, created, **kwargs):
+def create_related_client_resources(sender, instance, created, **kwargs):
     if created:
-        ShoppingCart.objects.create(client=instance)
+        ShoppingCart.objects.get_or_create(client=instance)
+        Wishlist.objects.get_or_create(client=instance)
 
 
 # _save_in_progress = False
