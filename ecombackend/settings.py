@@ -34,15 +34,15 @@ ALLOWED_HOSTS = ["*"]
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework.authentication.SessionAuthentication",
-        "rest_framework.authentication.TokenAuthentication",
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
 }
 
+
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
+    "ACCESS_TOKEN_LIFETIME": timedelta(days=7),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=30),
 }
 
 
@@ -60,6 +60,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "userauths",
     "taggit",
+    "phonenumber_field",
 ]
 
 MIDDLEWARE = [
@@ -159,3 +160,8 @@ CORS_ALLOWS_CREDENTIALS = True
 
 
 AUTH_USER_MODEL = "userauths.User"
+
+CELERY_BROKER_URL = 'redis://localhost:6379/0'  # or your cloud redis
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'

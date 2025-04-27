@@ -152,3 +152,10 @@ db.sqlite3
 # 3D Images
 *.3dm
 *.max
+
+
+celerybeat-schedule
+celerybeat-schedule-shm
+celerybeat-schedule-wal
+
+ecombackend/celerybeat-schedule*
