@@ -642,5 +642,10 @@ class Notification(models.Model):
         return f"notification {self.id}, user : {self.user.get_full_name()}"
 
 
+
+
+
+
+
 class FullSizeImages(models.Model):
     pass

@@ -48,6 +48,11 @@ class ApplicationUserManager(BaseUserManager):
         return self.create_user(email, password, **extra_fields)
 
 
+class Gender(models.TextChoices):
+    MALE = "male", "Male"
+    FEMALE = "female", "Female"
+
+
 class User(AbstractUser):
     uid = ShortUUIDField(unique=True, length=10, max_length=20, prefix="u_")
     email = models.EmailField(unique=True, blank=False)
@@ -61,6 +66,7 @@ class User(AbstractUser):
     updated_at = models.DateTimeField(auto_now=True)
     profile_image = models.ImageField(upload_to="profile_images", null=True, blank=True)
     phone_number = PhoneNumberField(region="MA", null=False, blank=False, unique=True)
+    gender = models.CharField(max_length=20, choices=Gender.choices, default="male")
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = ["username", "first_name", "last_name"]

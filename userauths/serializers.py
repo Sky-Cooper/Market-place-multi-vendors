@@ -1,6 +1,29 @@
 from .models import User, Vendor, Client, UserRoles, DeliveryAgent
 from rest_framework import serializers
 import json
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+
+
+class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+    def validate(self, attrs):
+        data = super().validate(attrs)
+        user = self.user
+        role = ""
+        if user.is_superuser:
+            role = "SUPER_USER"
+        if hasattr(user, "vendor"):
+            role = "VENDOR"
+
+        if hasattr(user, "client"):
+            role = "CLIENT"
+
+        if hasattr(user, "delivery_agent"):
+            role = "DELIVERY_AGENT"
+
+        data["user_id"] = user.id
+        data["email"] = user.email
+        data["role"] = role
+        return data
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -98,20 +121,20 @@ class VendorSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         return request.build_absolute_uri(obj.image.url) if obj.image else None
 
-    def to_internal_value(self, data):
-        data = data.copy()
-        user_data = data.get("user")
+    # def to_internal_value(self, data):
+    #     data = data.copy()
+    #     user_data = data.get("user")
 
-        if isinstance(user_data, str):
-            print(user_data)
-            try:
-                data["user"] = json.loads(user_data)
-            except json.JSONDecodeError:
-                raise serializers.ValidationError(
-                    {"user": "User field must be a valid JSON string."}
-                )
+    #     if isinstance(user_data, str):
+    #         print(user_data)
+    #         try:
+    #             data["user"] = json.loads(user_data)
+    #         except json.JSONDecodeError:
+    #             raise serializers.ValidationError(
+    #                 {"user": "User field must be a valid JSON string."}
+    #             )
 
-        return super().to_internal_value(data)
+    #     return super().to_internal_value(data)
 
 
 class ClientSerializer(serializers.ModelSerializer):
@@ -134,6 +157,18 @@ class ClientSerializer(serializers.ModelSerializer):
         ):
             raise serializers.ValidationError("this user is already linked")
         return data
+
+    def validate_list_of_interest(self, value):
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                raise serializers.ValidationError(
+                    "Invalid JSON format for list_of_interest."
+                )
+        if not isinstance(value, list):
+            raise serializers.ValidationError("list_of_interest must be a list.")
+        return value
 
     def create(self, validated_data):
         user_data = validated_data.pop("user")

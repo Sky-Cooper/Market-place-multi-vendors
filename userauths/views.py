@@ -5,6 +5,7 @@ from .serializers import (
     VendorSerializer,
     ClientSerializer,
     DeliveryAgentSerializer,
+    CustomTokenObtainPairSerializer,
 )
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -12,6 +13,11 @@ from rest_framework.exceptions import ValidationError, PermissionDenied
 from rest_framework import viewsets, permissions
 from rest_framework.parsers import MultiPartParser, FormParser
 from .permissions import RoleBasedQuerysetMixin, IsOwnerOrSuperAdmin
+from rest_framework_simplejwt.views import TokenObtainPairView
+
+
+class CustomTokenObtainPairView(TokenObtainPairView):
+    serializer_class = CustomTokenObtainPairSerializer
 
 
 class CreateUserView(generics.CreateAPIView):
