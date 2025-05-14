@@ -24,12 +24,16 @@ from .views import (
     VendorStrikeViewSet,
     ClientStrikeViewSet,
     NotificationViewSet,
+    FoodProductViewSet,
+    TestimonialViewSet,
 )
 
 from userauths.views import VendorViewSet, ClientViewSet, DeliveryAgentViewSet
 
 
 router = routers.DefaultRouter()
+router.register("testimonials", TestimonialViewSet, basename="testimonials")
+router.register("food-products", FoodProductViewSet, basename="food-products")
 router.register("notifications", NotificationViewSet, basename="notifications")
 router.register("vendor-strikes", VendorStrikeViewSet, basename="vendor-strikes")
 router.register("client-strikes", ClientStrikeViewSet, basename="client-strikes")
@@ -70,7 +74,7 @@ router.register("client/register", ClientViewSet, basename="client-register")
 router.register(
     "delivery-agent/register", DeliveryAgentViewSet, basename="delivery-agent"
 )
-router.register("sub-category", SubCategoryViewSet, basename="subcategory")
+router.register("sub-categories", SubCategoryViewSet, basename="subcategories")
 # router.register("global-order", GlobalCartViewset, basename="global-order")
 urlpatterns = [
     path("", include(router.urls)),

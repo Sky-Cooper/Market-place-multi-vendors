@@ -4,7 +4,10 @@ from shortuuid.django_fields import ShortUUIDField
 from django.utils.html import mark_safe
 from phonenumber_field.modelfields import PhoneNumberField
 
-MOROCCAN_CITIES_CHOICES = (("CS", "Casablanca"), ("RB", "Rabat"))
+
+class MOROCCAN_CITIES_CHOICES(models.TextChoices):
+    CASABLANCA = "Casablanca", "Casablanca"
+    RABAT = "Rabat", "Rabat"
 
 
 def user_directory_path(instance, filename):
@@ -86,6 +89,13 @@ class Client(models.Model):
     is_active = models.BooleanField(default=True)
     is_banned = models.BooleanField(default=False)
     amount_of_canceled_cart_order_items = models.PositiveBigIntegerField(default=0)
+    city = models.CharField(
+        max_length=128,
+        choices=MOROCCAN_CITIES_CHOICES.choices,
+        blank=False,
+        null=False,
+        default=MOROCCAN_CITIES_CHOICES.CASABLANCA,
+    )
 
     # the list_of_interest field gonna with the following : i ll display the possible categories and sub categories that exist in the database , and within the process of registration, the user gonna select some of the options and these options must be stored in his client instance in the database in this field list_of_interest , example ["food", "cloths", "classic_cloths" ...]
     def __str__(self):
@@ -109,7 +119,7 @@ class Vendor(models.Model):
     country = models.CharField(max_length=128, default="morocco")
     city = models.CharField(
         max_length=128,
-        choices=MOROCCAN_CITIES_CHOICES,
+        choices=MOROCCAN_CITIES_CHOICES.choices,
         blank=False,
         null=False,
     )
@@ -144,16 +154,13 @@ class Vendor(models.Model):
         return self.title
 
 
-MOROCCAN_CITIES_CHOICES = ()
-
-
 class DeliveryAgent(models.Model):
     user = models.OneToOneField(
         User, on_delete=models.CASCADE, related_name="delivery_agent"
     )
     city = models.CharField(
         max_length=56,
-        choices=MOROCCAN_CITIES_CHOICES,
+        choices=MOROCCAN_CITIES_CHOICES.choices,
         null=False,
         blank=False,
         default="CS",

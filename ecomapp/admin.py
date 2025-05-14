@@ -24,11 +24,11 @@ from ecomapp.models import (
     VendorStrike,
     ClientStrike,
     Notification,
+    ProductColor,
+    FoodProduct,
+    FoodProductImage,
+    Testimonial,
 )
-
-
-class ProductImagesAdmin(admin.TabularInline):
-    model = ProductImages
 
 
 # class CategoryAdmin(admin.ModelAdmin):
@@ -92,6 +92,7 @@ class ProductImagesAdmin(admin.TabularInline):
 #         "created_at",
 #         "updated_at",
 #     ]
+admin.site.register(FoodProduct)
 admin.site.register(VendorStrike)
 admin.site.register(ClientStrike)
 admin.site.register(Notification)
@@ -115,3 +116,7 @@ admin.site.register(DeliveryRating)
 admin.site.register(DeliveryAgentStrike)
 admin.site.register(Sector)
 admin.site.register(SubCategoryTag)
+admin.site.register(ProductColor)
+admin.site.register(ProductImages)
+admin.site.register(FoodProductImage)
+admin.site.register(Testimonial)

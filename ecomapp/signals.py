@@ -22,11 +22,59 @@ import threading
 import requests
 import json
 from django.contrib.contenttypes.models import ContentType
+import os
+from openai import OpenAI
+from django.core.mail import send_mail
 
 
-DEEPSEEK_API_KEY = (
-    "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"
-)
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+
+
+# DEEPSEEK_API_KEY = (
+#     "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"
+# )
+
+
+# client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+
+
+# def fetch_product_details(
+#     product_id, product_title, product_description, category_name, sub_category_name
+# ):
+#     print("Signal to get product details is started....")
+
+#     prompt = (
+#         "You are an AI product assistant. Based on the following product information, "
+#         "generate a detailed and informative product description that highlights its features, benefits, "
+#         "and use cases. Include any relevant technical details and suggestions for ideal users.\n\n"
+#         f"Product Title: {product_title}\n"
+#         f"Subcategory: {sub_category_name}\n"
+#         f"Category: {category_name}\n"
+#         f"Short Description: {product_description}\n\n"
+#         "Provide a full product description that includes technical specifications, user benefits, and ideal usage scenarios."
+#     )
+
+#     try:
+#         response = client.chat.completions.create(
+#             model="deepseek-chat",
+#             messages=[
+#                 {"role": "system", "content": "You are a helpful assistant"},
+#                 {"role": "user", "content": prompt},
+#             ],
+#             stream=False,
+#         )
+
+#         details = response.choices[0].message.content.strip()
+
+#         if details:
+#             Product.objects.filter(id=product_id).update(details=details)
+#             print("Product details successfully generated and saved.")
+
+#         else:
+#             print("No details return from the AI")
+
+#     except Exception as e:
+#         print(f"❌ Error occurred while generating product details: {e}")
 
 
 def fetch_product_details(
@@ -107,14 +155,18 @@ def reduce_stock_after_vendor_confirmation(sender, instance, **kwargs):
     if (
         previous is not None
         and previous.order_status != "confirmed"
-        and instance.order_status == "confirmed"
+        and (
+            instance.order_status == "confirmed" or instance.order_status == "delivered"
+        )
     ):
         print("updating order status to confirmed")
         related_cart_order_items = instance.cart_order_items.all()
         for cart_order_item in related_cart_order_items:
-            cart_order_item.cart_item.product.quantity -= (
-                cart_order_item.cart_item.quantity
-            )
+            if cart_order_item.cart_item.product:
+                cart_order_item.cart_item.product.quantity -= (
+                    cart_order_item.cart_item.quantity
+                )
+                cart_order_item.cart_item.product.save(update_fields=["quantity"])
 
 
 @receiver(post_save, sender=CartOrderItem)
@@ -149,7 +201,7 @@ def get_details(sender, instance, created, **kwargs):
                     instance.id,
                     instance.title,
                     instance.description,
-                    instance.sub_category.title,
+                    instance.sub_category.category.title,
                     instance.sub_category.title,
                 ),
             )
@@ -297,7 +349,7 @@ def cancel_and_notify_delivery_agent(claimed_order: ClaimedOrder):
     claimed_order.save(update_fields=["delivery_status"])
     Notification.objects.create(
         user=claimed_order.delivery_agent.user,
-        message=f"This order has been canceled , claimed order id : {claimed_order.id}, client name : {claimed_order.order.client.user.get_full_name()}, vendor name : {claimed_order.order.vendor.user.get_full_name()}",
+        message=f"your order has been canceled , claimed order id : {claimed_order.id}, client name : {claimed_order.order.client.user.get_full_name()}, vendor name : {claimed_order.order.vendor.user.get_full_name()}",
         content_type=ContentType.objects.get_for_model(ClaimedOrder),
         object_id=claimed_order.id,
         notification_type=NotificationType.ORDER,
@@ -381,6 +433,21 @@ def readjust_amount_of_products_after_cancellation(sender, instance, **kwargs):
             )
 
 
+@receiver(post_save, sender=Notification)
+def send_an_email(sender, instance, created, **kwargs):
+    if created:
+        user_full_name = instance.user.get_full_name()
+        user_email = instance.user.email
+        message = instance.message
+        send_mail(
+            f"Hello, {user_full_name}",
+            message,
+            "mouadhoumada@gmail.com",
+            [user_email],
+            fail_silently=False,
+        )
+
+
 @receiver(post_save, sender=CancellationRequestByDeliveryAgent)
 def check_if_cancellation_request_approved(sender, instance, **kwargs):
     if instance.is_approved and not instance.is_active:
@@ -395,7 +462,8 @@ def check_if_cancellation_request_approved(sender, instance, **kwargs):
 def update_order_status(sender, instance, **kwargs):
     if instance.delivery_status == "delivered":
         instance.order.order_status = "delivered"
-        instance.order.save(update_fields=["order_status"])
+        instance.is_active = False
+        instance.order.save(update_fields=["order_status", "is_active"])
 
 
 @receiver(post_save, sender=ClaimedOrder)

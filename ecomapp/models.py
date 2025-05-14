@@ -18,11 +18,40 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.db.models import TextChoices
 
+
 # Create your models here.
 
 
+class ColorChoices(models.TextChoices):
+    BLACK = "BLACK", "Black"
+    WHITE = "WHITE", "White"
+    GRAY = "GRAY", "Gray"
+    SILVER = "SILVER", "Silver"
+    RED = "RED", "Red"
+    MAROON = "MAROON", "Maroon"
+    PINK = "PINK", "Pink"
+    PURPLE = "PURPLE", "Purple"
+    VIOLET = "VIOLET", "Violet"
+    BLUE = "BLUE", "Blue"
+    NAVY = "NAVY", "Navy"
+    SKY_BLUE = "SKY_BLUE", "Sky Blue"
+    CYAN = "CYAN", "Cyan"
+    TEAL = "TEAL", "Teal"
+    GREEN = "GREEN", "Green"
+    LIME = "LIME", "Lime"
+    OLIVE = "OLIVE", "Olive"
+    YELLOW = "YELLOW", "Yellow"
+    GOLD = "GOLD", "Gold"
+    ORANGE = "ORANGE", "Orange"
+    BROWN = "BROWN", "Brown"
+    BEIGE = "BEIGE", "Beige"
+    TAN = "TAN", "Tan"
+    CREAM = "CREAM", "Cream"
+    NONE = "NONE", "None"
+
+
 STATUS_CHOICES = (
-    ("process", "Processing"),
+    ("processing", "Processing"),
     ("confirmed", "Confirmed"),
     ("shipped", "Shipped"),
     ("delivered", "Delivered"),
@@ -40,6 +69,7 @@ STATUS = (
     ("rejected", "Rejected"),
     ("published", "Published"),
 )
+
 
 RATING_CHOICES = (
     (1, "1"),
@@ -66,7 +96,7 @@ class Sector(models.Model):
         verbose_name_plural = "Sectors"
 
     def __str__(self):
-        return self.title
+        return f"sector id : {self.id} title : {self.title}"
 
 
 class Category(models.Model):
@@ -86,7 +116,7 @@ class Category(models.Model):
         return mark_safe('<img src="%s" width="50" height="50" /> ' % (self.image.url))
 
     def __str__(self):
-        return self.title
+        return f"category id : {self.id}, title : {self.title}"
 
 
 class SubCategory(models.Model):
@@ -116,7 +146,7 @@ class Product(models.Model):
         Vendor, on_delete=models.CASCADE, related_name="products"
     )
     title = models.CharField(max_length=128)
-    description = models.TextField(null=False, blank=False, default="")
+    description = models.CharField(max_length=80, null=False, blank=False, default="")
     sub_category = models.ForeignKey(
         SubCategory, on_delete=models.CASCADE, related_name="products"
     )
@@ -171,6 +201,18 @@ class Product(models.Model):
         super().save(*args, **kwargs)
 
 
+class ProductColor(models.Model):
+    color = models.CharField(
+        max_length=54, choices=ColorChoices.choices, null=False, blank=False
+    )
+    product = models.ForeignKey(
+        Product, on_delete=models.CASCADE, related_name="colors"
+    )
+
+    def __str__(self):
+        return f"{self.color} product : {self.product.title}"
+
+
 class ProductImages(models.Model):
     image = models.ImageField(upload_to="product-images/")
     product = models.ForeignKey(
@@ -187,22 +229,96 @@ class ProductImages(models.Model):
         return f"image for {self.product.title}"
 
 
+class FoodProduct(models.Model):
+    vendor = models.ForeignKey(
+        Vendor, on_delete=models.CASCADE, related_name="food_products"
+    )
+    title = models.CharField(max_length=128)
+    description = models.CharField(max_length=80, null=False, blank=False, default="")
+    sub_category = models.ForeignKey(
+        SubCategory, on_delete=models.CASCADE, related_name="food_products"
+    )
+    image = models.ImageField(upload_to=user_directory_path)
+    price = models.DecimalField(max_digits=10, decimal_places=2, blank=False)
+    old_price = models.DecimalField(
+        max_digits=10, decimal_places=2, null=True, blank=True
+    )
+    specifications = models.TextField(null=True, blank=True)
+    tags = TaggableManager()
+    is_active = models.BooleanField(default=True)
+    in_stock = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    discount_percentage = models.PositiveIntegerField(default=0)
+    quantity = models.PositiveIntegerField(null=True, blank=True)
+    details = models.TextField(null=True, blank=True)
+    ingredients = models.TextField(null=True, blank=True)
+    expired_at = models.DateField(null=True, blank=True)
+    weight_in_grams = models.PositiveIntegerField(null=True, blank=True)
+    calories = models.PositiveIntegerField(null=True, blank=True)
+    is_vegan = models.BooleanField(default=False)
+
+    class Meta:
+        verbose_name_plural = "Food Products"
+
+    def save(self, *args, **kwargs):
+        if self.old_price and self.old_price > self.price:
+            discount = self.old_price - self.price
+            discount = discount / self.old_price * 100
+            self.discount_percentage = round(discount)
+
+        if self.old_price and self.old_price < self.price:
+            self.discount_percentage = 0
+
+        if self.quantity == 0:
+            self.in_stock = False
+        else:
+            self.in_stock = True
+
+        super().save(*args, **kwargs)
+
+    def food_image(self):
+        return mark_safe(f'<img src="{self.image.url}" width="50" height="50" />')
+
+    def __str__(self):
+        return f"{self.title} (FoodProduct ID: {self.id})"
+
+
 class ProductReview(models.Model):
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="reviews")
-    product = models.ForeignKey(
-        Product, on_delete=models.CASCADE, related_name="reviews"
-    )
+
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.PositiveIntegerField(default=1)
+    content_object = GenericForeignKey("content_type", "object_id")
+
     comment = models.TextField(max_length=524, blank=True, null=True)
-    rating = models.PositiveSmallIntegerField(choices=RATING_CHOICES, blank=False)
+    rating = models.PositiveSmallIntegerField(choices=RATING_CHOICES)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        unique_together = (
+            "client",
+            "content_type",
+            "object_id",
+        )
         verbose_name_plural = "Product Reviews"
 
     def __str__(self):
+        return f"{self.client.user.get_full_name()} - {self.rating} stars"
 
-        return f"{self.client.user.get_full_name()} - {self.product.title} - {self.comment} - {self.rating}"
+
+class FoodProductImage(models.Model):
+    image = models.ImageField(upload_to="food-product-images/")
+    food_product = models.ForeignKey(
+        FoodProduct, on_delete=models.CASCADE, related_name="images"
+    )
+
+    class Meta:
+        verbose_name_plural = "Food Product Images"
+
+    def __str__(self):
+        return f"Image for {self.food_product.title}"
 
 
 class Wishlist(models.Model):
@@ -245,7 +361,7 @@ class ShoppingCart(models.Model):
         verbose_name_plural = "Shopping Carts"
 
     def __str__(self):
-        return f"Shopping cart of {self.client.user.get_full_name()}"
+        return f"Shopping cart of {self.client.user.get_full_name()} id : {self.id}"
 
 
 class CartItem(models.Model):
@@ -253,7 +369,18 @@ class CartItem(models.Model):
         ShoppingCart, on_delete=models.CASCADE, related_name="cart_items"
     )
     product = models.ForeignKey(
-        Product, on_delete=models.CASCADE, related_name="cart_items"
+        Product,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="cart_items",
+    )
+    food_product = models.ForeignKey(
+        FoodProduct,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="cart_items",
     )
     quantity = models.PositiveIntegerField(default=1)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -270,12 +397,23 @@ class CartItem(models.Model):
         # ]
 
     def __str__(self):
-        return f"cart item id {self.id}: {self.product.title} - {self.quantity}"
+        return f"cart item id {self.id}: {self.product.title if self.product else self.food_product.title} - {self.quantity}"
 
     def save(self, *args, **kwargs):
-        if self.product and self.quantity:
+        if self.product and not self.food_product:
             self.total_price = self.product.price * self.quantity
+        if self.food_product and not self.product:
+            self.total_price = self.food_product.price * self.quantity
+
         super().save(*args, **kwargs)
+
+    def get_product(self):
+        return self.product or self.food_product
+
+    def get_price(self):
+        return (
+            self.product.price if self.product else self.food_product.price
+        ) * self.quantity
 
 
 # incases the payment is cash on delivery then the vendor should follow the structure of the shipping for better stock management
@@ -308,7 +446,7 @@ class GlobalOrder(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    delivery_option = models.BooleanField(default=False)
+    delivery_option = models.BooleanField(default=True)
 
     class Meta:
         verbose_name_plural = "global_orders"
@@ -337,7 +475,9 @@ class CartOrder(models.Model):
     delivery_option = models.BooleanField(default=False)
     is_canceled = models.BooleanField(default=False)
     order_status = models.CharField(
-        max_length=128, choices=STATUS_CHOICES, default="processing"
+        max_length=128,
+        choices=STATUS_CHOICES,
+        default="processing",
     )
     is_active = models.BooleanField(default=True)
 
@@ -378,7 +518,7 @@ class CartOrderItem(models.Model):
         verbose_name_plural = "Cart Order Items"
 
     def __str__(self):
-        return f"{self.cart_item.product.title} {self.cart_item.quantity}"
+        return f"{self.cart_item.product.title if self.cart_item.product else self.cart_item.food_product.title} {self.cart_item.quantity}"
 
 
 # class OrderConfirmationVendor(models.Model):
@@ -500,6 +640,7 @@ class ClaimedOrder(models.Model):
     delivery_status = models.CharField(
         max_length=56, choices=DELIVERY_CHOICES, default="processing"
     )
+    is_active = models.BooleanField(default=True)
 
     class Meta:
         constraints = [
@@ -642,10 +783,15 @@ class Notification(models.Model):
         return f"notification {self.id}, user : {self.user.get_full_name()}"
 
 
+class Testimonial(models.Model):
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="testimonials"
+    )
+    message = models.CharField(max_length=254, null=False, blank=False)
+    rating = models.PositiveSmallIntegerField(
+        null=False, blank=False, choices=RATING_CHOICES
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
 
-
-
-
-
-class FullSizeImages(models.Model):
-    pass
+    def __str__(self):
+        return f"testimonial id : {self.id}, user: {self.user.get_full_name()}"

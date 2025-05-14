@@ -24,6 +24,8 @@ from .serializers import (
     ClientStrikeSerializer,
     VendorStrikeSerializer,
     NotificationSerializer,
+    FoodProductSerializer,
+    TestimonialSerializer,
 )
 from rest_framework import viewsets, permissions, status
 from django.db import transaction
@@ -33,7 +35,6 @@ from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.exceptions import ValidationError, PermissionDenied
 from rest_framework.response import Response
-from rest_framework.viewsets import ViewSet
 from userauths.models import *
 from userauths.permissions import (
     IsOwnerOrSuperAdmin,
@@ -42,7 +43,7 @@ from userauths.permissions import (
 )
 from rest_framework.decorators import action
 from django.utils import timezone
-
+from django.db.models import Q, Sum
 
 # Create your views here.
 
@@ -99,8 +100,36 @@ class ProductViewSet(viewsets.ModelViewSet):
     serializer_class = ProductSerializer
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="trending",
+        permission_classes=[permissions.AllowAny],
+        authentication_classes=[],
+    )
+    def trending_products(self, request):
+        trending_product = (
+            Product.objects.filter(
+                cart_items__cart_order_items__order__order_status="delivered"
+            )
+            .annotate(
+                total_quantity_sold=Sum(
+                    "cart_items__quantity",
+                    filter=Q(
+                        cart_items__cart_order_items__order__order_status="delivered"
+                    ),
+                )
+            )
+            .order_by("-total_quantity_sold")[:10]
+        )
+
+        serializer = self.get_serializer(
+            trending_product, many=True, context={"request": request}
+        )
+        return Response(serializer.data)
+
     def get_permissions(self):
-        if self.action in ["list", "retrieve"]:
+        if self.action in ["list", "retrieve", "trending_products"]:
             return [permissions.AllowAny()]
         return [permissions.IsAuthenticated()]
 
@@ -145,6 +174,83 @@ class ProductViewSet(viewsets.ModelViewSet):
         if instance.vendor != user.vendor:
             raise ValidationError(
                 "you are not the owner of this product , you dont have the permission to delete it"
+            )
+
+        return instance.delete()
+
+
+class FoodProductViewSet(viewsets.ModelViewSet):
+    queryset = FoodProduct.objects.all()
+    serializer_class = FoodProductSerializer
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="trending",
+        permission_classes=[permissions.AllowAny],
+        authentication_classes=[],
+    )
+    def trending_food_products(self, request):
+        trending_food_product = (
+            FoodProduct.objects.filter(
+                cart_items__cart_order_items__order__order_status="delivered"
+            )
+            .annotate(
+                total_quantity_sold=Sum(
+                    "cart_items__quantity",
+                    filter=Q(
+                        cart_items__cart_order_items__order__order_status="delivered"
+                    ),
+                )
+            )
+            .order_by("-total_quantity_sold")[:10]
+        )
+        serializer = self.get_serializer(
+            trending_food_product, many=True, context={"request": request}
+        )
+        return Response(serializer.data)
+
+    def get_permissions(self):
+        if self.action in ["list", "retrieve", "trending_food_products"]:
+            return [permissions.AllowAny()]
+        return [permissions.IsAuthenticated()]
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        if not hasattr(user, "vendor"):
+            raise ValidationError("No vendor is linked to this user")
+        vendor = user.vendor
+        serializer.save(vendor=vendor)
+
+    def perform_update(self, serializer):
+        user = self.request.user
+        if user.is_superuser:
+            serializer.save()
+            return
+
+        if not hasattr(user, "vendor"):
+            raise ValidationError("No vendor is linked to this user")
+
+        vendor = user.vendor
+        food_product = serializer.instance
+        if food_product.vendor != vendor:
+            raise ValidationError(
+                "you cannot update this product because it belongs to another vendor"
+            )
+
+        serializer.save(vendor=vendor)
+
+    def perform_destroy(self, instance):
+        user = self.request.user
+        if user.is_superuser:
+            return instance.delete()
+        if not hasattr(user, "vendor"):
+            raise ValidationError("only vendors that can delete the products")
+
+        if instance.vendor != user.vendor:
+            raise ValidationError(
+                "you are no the owner of this product, you dont have permissions to delete it"
             )
 
         return instance.delete()
@@ -250,20 +356,14 @@ class ProductReviewViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user
         if not hasattr(user, "client"):
-            raise ValidationError("only clients who can create reviews")
+            raise ValidationError("Only clients can create reviews.")
         serializer.save(client=user.client)
 
     def perform_destroy(self, instance):
         user = self.request.user
-        if not hasattr(user, "client"):
-            raise PermissionDenied("this user has no client account")
-
-        if user.client != instance.client:
-            raise PermissionDenied(
-                "you are not the owner of this review , you cannot delete it"
-            )
-
-        return instance.delete()
+        if not hasattr(user, "client") or user.client != instance.client:
+            raise PermissionDenied("You cannot delete this review.")
+        instance.delete()
 
 
 class WishlistViewSet(viewsets.ModelViewSet):
@@ -375,6 +475,7 @@ class CartItemViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if hasattr(user, "client") and hasattr(user.client, "shopping_cart"):
+
             return CartItem.objects.filter(shopping_cart=user.client.shopping_cart)
         if user.is_superuser:
             return CartItem.objects.all()
@@ -385,8 +486,8 @@ class CartItemViewSet(viewsets.ModelViewSet):
         if not hasattr(user, "client"):
             raise PermissionDenied("only clients can add items to the cart.")
         shopping_cart = user.client.shopping_cart
-        cart_items = shopping_cart.cart_items.all()
-        if len(cart_items) > 9:
+        not_ordered_cart_items = shopping_cart.cart_items.filter(is_ordered=False)
+        if len(not_ordered_cart_items) > 9:
             raise ValidationError(
                 "you cannot have more than 10 cart items in your shopping cart"
             )
@@ -431,7 +532,7 @@ class GlobalCartViewset(APIView):
         today = timezone.now()
         cart_items = shopping_cart.cart_items.filter(is_ordered=False)
         if len(cart_items) < 1:
-            return Response({"error": "there is no cart item for this shopping cart"})
+            return Response({"error": "Your shopping cart is empty."})
         global_order = serializer.save(shopping_cart=shopping_cart)
 
         not_delivered_orders = (
@@ -439,9 +540,10 @@ class GlobalCartViewset(APIView):
                 order__client=client,
                 created_at__gte=today - timedelta(days=30),
             )
-            .exclude(order__order_status="delivered")
+            .filter(~Q(order__order_status="delivered"))
             .count()
         )
+
         if not_delivered_orders > 9:
             raise ValidationError(
                 "you cant have more than 10 none delivered orders in the last 30 days"
@@ -453,7 +555,13 @@ class GlobalCartViewset(APIView):
 
         global_order_total_price = 0
         for cart_item in cart_items:
-            vendor = cart_item.product.vendor
+            vendor = (
+                cart_item.product.vendor
+                if cart_item.product
+                else cart_item.food_product.vendor
+            )
+            if not vendor or vendor.city != client.city:
+                raise ValidationError("Some cart items are not available in your city.")
             global_order_total_price += cart_item.total_price
             if vendor not in vendors:
                 vendors[vendor] = []
@@ -468,10 +576,7 @@ class GlobalCartViewset(APIView):
         try:
             for vendor, cart_items in vendors.items():
 
-                total_payed = sum(
-                    cart_item.product.price * cart_item.quantity
-                    for cart_item in cart_items
-                )
+                total_payed = sum(cart_item.get_price() for cart_item in cart_items)
 
                 cart_order = CartOrder.objects.create(
                     client=client,
@@ -496,7 +601,12 @@ class GlobalCartViewset(APIView):
                         client=client,
                         order=cart_order,
                         cart_item=cart_item,
-                        total_payed=cart_item.product.price * cart_item.quantity,
+                        total_payed=(
+                            cart_item.product.price
+                            if cart_item.product
+                            else cart_item.food_product.price
+                        )
+                        * cart_item.quantity,
                     )
                     cart_item.is_ordered = True
                     cart_item.save()
@@ -622,8 +732,6 @@ class ClaimedOrderViewSet(viewsets.ModelViewSet):
 
         return ClaimedOrder.objects.none()
 
- 
-
 
 class DeliveryRatingViewSet(viewsets.ModelViewSet):
     queryset = DeliveryRating.objects.all()
@@ -721,3 +829,9 @@ class NotificationViewSet(viewsets.ModelViewSet):
             return Notification.objects.all()
 
         return Notification.objects.filter(user=user)
+
+
+class TestimonialViewSet(viewsets.ModelViewSet):
+    queryset = Testimonial.objects.all()
+    serializer_class = TestimonialSerializer
+    permission_classes = [permissions.AllowAny]
