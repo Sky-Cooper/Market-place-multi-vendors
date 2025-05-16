@@ -26,12 +26,15 @@ from .views import (
     NotificationViewSet,
     FoodProductViewSet,
     TestimonialViewSet,
+    FoodProductListAPIView,
+    ProductListAPIView,
 )
 
 from userauths.views import VendorViewSet, ClientViewSet, DeliveryAgentViewSet
 
 
 router = routers.DefaultRouter()
+
 router.register("testimonials", TestimonialViewSet, basename="testimonials")
 router.register("food-products", FoodProductViewSet, basename="food-products")
 router.register("notifications", NotificationViewSet, basename="notifications")
@@ -75,8 +78,14 @@ router.register(
     "delivery-agent/register", DeliveryAgentViewSet, basename="delivery-agent"
 )
 router.register("sub-categories", SubCategoryViewSet, basename="subcategories")
-# router.register("global-order", GlobalCartViewset, basename="global-order")
+
 urlpatterns = [
-    path("", include(router.urls)),
     path("global-orders/", GlobalCartViewset.as_view(), name="global-orders"),
+    path("products/list/", ProductListAPIView.as_view(), name="product-list-filtered"),
+    path(
+        "food-products/list/",
+        FoodProductListAPIView.as_view(),
+        name="food-product-list-filtered",
+    ),
+    path("", include(router.urls)),
 ]

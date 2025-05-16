@@ -184,6 +184,7 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
     image_url = serializers.SerializerMethodField()
     tags = TagListSerializerField()
     vendor = VendorSerializer(read_only=True)
+    sub_category = SubCategorySerializer()
 
     class Meta:
         model = Product

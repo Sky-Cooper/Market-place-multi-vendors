@@ -44,6 +44,9 @@ from userauths.permissions import (
 from rest_framework.decorators import action
 from django.utils import timezone
 from django.db.models import Q, Sum
+from .filters import ProductFilter, FoodProductFilter
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import generics, filters as drf_filters
 
 # Create your views here.
 
@@ -835,3 +838,49 @@ class TestimonialViewSet(viewsets.ModelViewSet):
     queryset = Testimonial.objects.all()
     serializer_class = TestimonialSerializer
     permission_classes = [permissions.AllowAny]
+
+
+class ProductListAPIView(generics.ListAPIView):
+    queryset = Product.objects.filter(is_active=True).select_related(
+        "sub_category__category__sector", "vendor"
+    )
+    serializer_class = ProductSerializer
+    filter_backends = [
+        DjangoFilterBackend,
+        drf_filters.SearchFilter,
+        drf_filters.OrderingFilter,
+    ]
+    filterset_class = ProductFilter
+    search_fields = [
+        "title",
+        "description",
+        "tags__name",
+        "specifications",
+        "vendor_title",
+        "vendor__user__first_name",
+    ]
+    ordering_fields = ["price", "created_at"]
+    ordering = ["-created_at"]
+
+
+class FoodProductListAPIView(generics.ListAPIView):
+    queryset = FoodProduct.objects.filter(is_active=True).select_related(
+        "sub_category__category__sector", "vendor"
+    )
+    serializer_class = FoodProductSerializer
+    filter_backends = [
+        DjangoFilterBackend,
+        drf_filters.SearchFilter,
+        drf_filters.OrderingFilter,
+    ]
+    filterset_class = FoodProductFilter
+    search_fields = [
+        "title",
+        "description",
+        "tags__name",
+        "specifications",
+        "vendor_title",
+        "ingredients",
+    ]
+    ordering_fields = ["price", "created_at", "calories"]
+    ordering = ["-created_at"]

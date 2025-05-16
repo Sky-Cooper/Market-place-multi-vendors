@@ -160,7 +160,7 @@ class Product(models.Model):
     product_status = models.CharField(
         max_length=20, choices=STATUS, default="in_review"
     )
-    is_active = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True, null=False, blank=False)
     in_stock = models.BooleanField(default=True)
     featured = models.BooleanField(default=True)
     is_digital = models.BooleanField(default=False)
@@ -245,7 +245,7 @@ class FoodProduct(models.Model):
     )
     specifications = models.TextField(null=True, blank=True)
     tags = TaggableManager()
-    is_active = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True, null=False, blank=False)
     in_stock = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
