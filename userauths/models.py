@@ -131,6 +131,7 @@ class Vendor(models.Model):
     is_active = models.BooleanField(default=True)
     is_banned = models.BooleanField(default=False)
     ban_expired_at = models.DateTimeField(null=True, blank=True)
+    total_sold = models.PositiveIntegerField(default=0)
 
     @property
     def chat_response_time(self):

@@ -28,6 +28,7 @@ from ecomapp.models import (
     FoodProduct,
     FoodProductImage,
     Testimonial,
+    ProductSize,
 )
 
 
@@ -120,3 +121,4 @@ admin.site.register(ProductColor)
 admin.site.register(ProductImages)
 admin.site.register(FoodProductImage)
 admin.site.register(Testimonial)
+admin.site.register(ProductSize)

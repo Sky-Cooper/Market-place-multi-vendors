@@ -28,12 +28,23 @@ from .views import (
     TestimonialViewSet,
     FoodProductListAPIView,
     ProductListAPIView,
+    CategoryListAPIView,
+    SubCategoryListAPIView,
+    ProductSizeView,
+    CartItemListAPIView,
+    AIProductAssistantAPIView,
 )
 
-from userauths.views import VendorViewSet, ClientViewSet, DeliveryAgentViewSet
+from userauths.views import (
+    VendorViewSet,
+    ClientViewSet,
+    DeliveryAgentViewSet,
+    VendorListAPIView,
+)
 
 
 router = routers.DefaultRouter()
+
 
 router.register("testimonials", TestimonialViewSet, basename="testimonials")
 router.register("food-products", FoodProductViewSet, basename="food-products")
@@ -62,6 +73,7 @@ router.register(
     SubscriptionFeatureViewSet,
     basename="subscription-features",
 )
+router.register("products-sizes", ProductSizeView, basename="products-sizes")
 router.register("categories", CategoryViewSet, basename="categories")
 router.register("products", ProductViewSet, basename="products")
 router.register("product-images", ProductImagesViewSet, basename="product-images")
@@ -81,11 +93,26 @@ router.register("sub-categories", SubCategoryViewSet, basename="subcategories")
 
 urlpatterns = [
     path("global-orders/", GlobalCartViewset.as_view(), name="global-orders"),
+    path("vendors/list/", VendorListAPIView.as_view(), name="vendor-list"),
     path("products/list/", ProductListAPIView.as_view(), name="product-list-filtered"),
     path(
         "food-products/list/",
         FoodProductListAPIView.as_view(),
         name="food-product-list-filtered",
+    ),
+    path("cart-items/list/", CartItemListAPIView.as_view(), name="cart-items-filtered"),
+    path(
+        "categories/list/", CategoryListAPIView.as_view(), name="category-list-filtered"
+    ),
+    path(
+        "sub-categories/list/",
+        SubCategoryListAPIView.as_view(),
+        name="sub-category-list-filtered",
+    ),
+    path(
+        "aiProductAssistant/",
+        AIProductAssistantAPIView.as_view(),
+        name="ai-products-assistant",
     ),
     path("", include(router.urls)),
 ]

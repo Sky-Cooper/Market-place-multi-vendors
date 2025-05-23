@@ -10,7 +10,8 @@ from .serializers import (
     WishlistSerializer,
     AddressSerializer,
     ShoppingCartSerializer,
-    CartItemSerializer,
+    CartItemReadSerializer,
+    CartItemWriteSerializer,
     SubCategorySerializer,
     GlobalOrderSerializer,
     SubscriptionFeatureSerializer,
@@ -26,11 +27,13 @@ from .serializers import (
     NotificationSerializer,
     FoodProductSerializer,
     TestimonialSerializer,
+    ProductSizeSerializer,
+    AiMessageSerializer,
 )
 from rest_framework import viewsets, permissions, status
 from django.db import transaction
 from datetime import datetime, timedelta
-
+from .prompts import identify_subcategories, select_products
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.exceptions import ValidationError, PermissionDenied
@@ -44,11 +47,18 @@ from userauths.permissions import (
 from rest_framework.decorators import action
 from django.utils import timezone
 from django.db.models import Q, Sum
-from .filters import ProductFilter, FoodProductFilter
+from .filters import (
+    ProductFilter,
+    FoodProductFilter,
+    CategoryFilter,
+    SubCategoryFilter,
+    ProductPagination,
+    CartItemFilter,
+)
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import generics, filters as drf_filters
-
-# Create your views here.
+import os
+from .available_data import SUBCATEGORIES, SUBCATEGORIES_PRODUCTS
 
 
 class SectorViewSet(viewsets.ModelViewSet):
@@ -472,8 +482,12 @@ class ShoppingCartViewSet(viewsets.ModelViewSet):
 
 
 class CartItemViewSet(viewsets.ModelViewSet):
-    serializer_class = CartItemSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_serializer_class(self):
+        if self.action in ["create", "update", "partial_update"]:
+            return CartItemWriteSerializer
+        return CartItemReadSerializer
 
     def get_queryset(self):
         user = self.request.user
@@ -572,8 +586,8 @@ class GlobalCartViewset(APIView):
             vendors[vendor].append(cart_item)
 
         cart_orders = []
-
-        global_order.total_price = global_order_total_price
+        vendor_keys = list(vendors.keys())
+        global_order.total_price = global_order_total_price + (len(vendor_keys) * 20)
         global_order.save(update_fields=["total_price"])
 
         try:
@@ -600,21 +614,26 @@ class GlobalCartViewset(APIView):
                 cart_orders.append(cart_order)
 
                 for cart_item in cart_items:
-                    CartOrderItem.objects.create(
-                        client=client,
-                        order=cart_order,
-                        cart_item=cart_item,
-                        total_payed=(
-                            cart_item.product.price
-                            if cart_item.product
-                            else cart_item.food_product.price
+                    try:
+                        CartOrderItem.objects.create(
+                            client=client,
+                            order=cart_order,
+                            cart_item=cart_item,
+                            total_payed=(
+                                cart_item.product.price
+                                if cart_item.product
+                                else cart_item.food_product.price
+                            )
+                            * cart_item.quantity,
                         )
-                        * cart_item.quantity,
-                    )
-                    cart_item.is_ordered = True
-                    cart_item.save()
+                        cart_item.is_ordered = True
+                        cart_item.save(update_fields=["is_ordered"])
 
-                    print(f"Created CartOrderItem for CartOrder ID: {cart_order.id}")
+                        print(
+                            f"Created CartOrderItem for CartOrder ID: {cart_order.id}"
+                        )
+                    except Exception as e:
+                        raise e
                     # TODO : make sure to use signals in order to inform the vendors and send updates in their email
 
         except Exception as e:
@@ -841,10 +860,13 @@ class TestimonialViewSet(viewsets.ModelViewSet):
 
 
 class ProductListAPIView(generics.ListAPIView):
+
     queryset = Product.objects.filter(is_active=True).select_related(
         "sub_category__category__sector", "vendor"
     )
+    permission_classes = [permissions.AllowAny]
     serializer_class = ProductSerializer
+    pagination_class = ProductPagination
     filter_backends = [
         DjangoFilterBackend,
         drf_filters.SearchFilter,
@@ -868,6 +890,7 @@ class FoodProductListAPIView(generics.ListAPIView):
         "sub_category__category__sector", "vendor"
     )
     serializer_class = FoodProductSerializer
+    pagination_class = ProductPagination
     filter_backends = [
         DjangoFilterBackend,
         drf_filters.SearchFilter,
@@ -884,3 +907,126 @@ class FoodProductListAPIView(generics.ListAPIView):
     ]
     ordering_fields = ["price", "created_at", "calories"]
     ordering = ["-created_at"]
+
+
+class CategoryListAPIView(generics.ListAPIView):
+    queryset = Category.objects.all()
+    serializer_class = CategorySerializer
+    filter_backends = [
+        DjangoFilterBackend,
+        drf_filters.SearchFilter,
+        drf_filters.OrderingFilter,
+    ]
+    filterset_class = CategoryFilter
+    search_fields = ["title", "sector__title"]
+    ordering_fields = ["created_at"]
+    ordering = ["-created_at"]
+
+
+class SubCategoryListAPIView(generics.ListAPIView):
+    queryset = SubCategory.objects.all()
+    serializer_class = SubCategorySerializer
+    filter_backends = [
+        DjangoFilterBackend,
+        drf_filters.SearchFilter,
+        drf_filters.OrderingFilter,
+    ]
+    filterset_class = SubCategoryFilter
+    search_fields = ["title", "category__title", "category__sector__title"]
+
+    ordering_fields = ["created_at"]
+    ordering = ["-created_at"]
+
+
+class ProductSizeView(viewsets.ModelViewSet):
+    queryset = ProductSize.objects.all()
+    serializer_class = ProductSizeSerializer
+
+    def get_permissions(self):
+        if self.action in ["retrieve", "list"]:
+            return [permissions.AllowAny()]
+
+        return [permissions.IsAuthenticated()]
+
+
+class CartItemListAPIView(generics.ListAPIView):
+    serializer_class = CartItemReadSerializer
+    filter_backends = [
+        DjangoFilterBackend,
+        drf_filters.SearchFilter,
+        drf_filters.OrderingFilter,
+    ]
+    filterset_class = CartItemFilter
+    pagination_class = ProductPagination
+    search_fields = ["is_ordered"]
+    ordering_fields = ["created_at"]
+    ordering = ["-created_at"]
+
+    def get_queryset(self):
+        user = self.request.user
+        if not user.is_superuser and not hasattr(user, "client"):
+            raise ValidationError(
+                "only super users and clients tht can access this resource"
+            )
+        if user.is_superuser:
+            return CartItem.objects.all()
+
+        return CartItem.objects.filter(shopping_cart=user.client.shopping_cart)
+
+
+class AIProductAssistantAPIView(APIView):
+    def post(self, request):
+        serializer = AiMessageSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        message = serializer.validated_data["message"]
+        response = identify_subcategories(message, SUBCATEGORIES)
+
+        if not response:
+            return Response({"message": "No relevant subcategories found."}, status=200)
+
+        desired_subcategories_with_products = {}
+        for subcategory in response.values():
+            normalized_sub = subcategory.title()
+            if normalized_sub in SUBCATEGORIES_PRODUCTS:
+                desired_subcategories_with_products[normalized_sub] = (
+                    SUBCATEGORIES_PRODUCTS[normalized_sub]
+                )
+
+        if not desired_subcategories_with_products:
+            return Response(
+                {"message": "No products found for the relevant subcategories."},
+                status=200,
+            )
+        print(desired_subcategories_with_products)
+        desired_products = select_products(message, desired_subcategories_with_products)
+        products = []
+
+        if desired_products:
+            for product_title in desired_products.values():
+
+                food_product = FoodProduct.objects.filter(title=product_title).first()
+                if food_product:
+                    products.append(
+                        FoodProductSerializer(
+                            food_product, context={"request": request}
+                        ).data
+                    )
+                    continue
+
+                product = Product.objects.filter(title=product_title).first()
+                if product:
+                    products.append(
+                        ProductSerializer(product, context={"request": request}).data
+                    )
+
+        if not products:
+            return Response(
+                {"message": "No products found in the database regarding your need"},
+                status=200,
+            )
+        print(f"products=== {products}")
+        response_data = {"products": products}
+
+        return Response(response_data, status=200)

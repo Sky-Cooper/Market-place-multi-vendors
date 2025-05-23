@@ -17,9 +17,18 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.db.models import TextChoices
+from django.contrib.contenttypes.fields import GenericRelation
 
 
 # Create your models here.
+class SizeChoices(models.TextChoices):
+    XS = "XS", "Extra Small"
+    S = "S", "Small"
+    M = "M", "Medium"
+    L = "L", "Large"
+    XL = "XL", "Extra Large"
+    XXL = "XXL", "2X Large"
+    XXXL = "XXXL", "3X Large"
 
 
 class ColorChoices(models.TextChoices):
@@ -141,6 +150,30 @@ class SubCategoryTag(models.Model):
         return f"{self.name}"
 
 
+class ProductReview(models.Model):
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="reviews")
+
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.PositiveIntegerField(default=1)
+    content_object = GenericForeignKey("content_type", "object_id")
+
+    comment = models.TextField(max_length=524, blank=True, null=True)
+    rating = models.PositiveSmallIntegerField(choices=RATING_CHOICES)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = (
+            "client",
+            "content_type",
+            "object_id",
+        )
+        verbose_name_plural = "Product Reviews"
+
+    def __str__(self):
+        return f"{self.client.user.get_full_name()} - {self.rating} stars"
+
+
 class Product(models.Model):
     vendor = models.ForeignKey(
         Vendor, on_delete=models.CASCADE, related_name="products"
@@ -170,6 +203,8 @@ class Product(models.Model):
     quantity = models.PositiveIntegerField(default=1)
     details = models.TextField(null=True, blank=True)
     potential_guarantee_period = models.PositiveIntegerField(null=True, blank=True)
+    reviews = GenericRelation(ProductReview)
+    long_description = models.TextField(null=True, blank=True)
 
     class Meta:
         verbose_name_plural = "Products"
@@ -181,7 +216,9 @@ class Product(models.Model):
         return mark_safe('<img src="%s" width="50" height="50" />' % (self.image.url))
 
     def __str__(self):
-        return f"title {self.title} id : {self.id}"
+        return (
+            f"{self.title} id : {self.id} subcategory title : {self.sub_category.title}"
+        )
 
     def save(self, *args, **kwargs):
         if self.old_price and self.old_price > self.price:
@@ -257,6 +294,8 @@ class FoodProduct(models.Model):
     weight_in_grams = models.PositiveIntegerField(null=True, blank=True)
     calories = models.PositiveIntegerField(null=True, blank=True)
     is_vegan = models.BooleanField(default=False)
+    reviews = GenericRelation(ProductReview)
+    long_description = models.TextField(null=True, blank=True)
 
     class Meta:
         verbose_name_plural = "Food Products"
@@ -281,31 +320,7 @@ class FoodProduct(models.Model):
         return mark_safe(f'<img src="{self.image.url}" width="50" height="50" />')
 
     def __str__(self):
-        return f"{self.title} (FoodProduct ID: {self.id})"
-
-
-class ProductReview(models.Model):
-    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name="reviews")
-
-    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
-    object_id = models.PositiveIntegerField(default=1)
-    content_object = GenericForeignKey("content_type", "object_id")
-
-    comment = models.TextField(max_length=524, blank=True, null=True)
-    rating = models.PositiveSmallIntegerField(choices=RATING_CHOICES)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        unique_together = (
-            "client",
-            "content_type",
-            "object_id",
-        )
-        verbose_name_plural = "Product Reviews"
-
-    def __str__(self):
-        return f"{self.client.user.get_full_name()} - {self.rating} stars"
+        return f"{self.title} (FoodProduct ID: {self.id}) subcategory is {self.sub_category.title}"
 
 
 class FoodProductImage(models.Model):
@@ -387,6 +402,9 @@ class CartItem(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     total_price = models.DecimalField(max_digits=10, decimal_places=2)
     is_ordered = models.BooleanField(default=False)
+    size = models.CharField(
+        max_length=20, choices=SizeChoices.choices, null=True, blank=True
+    )
 
     class Meta:
         verbose_name_plural = "Cart Items"
@@ -416,23 +434,18 @@ class CartItem(models.Model):
         ) * self.quantity
 
 
-# incases the payment is cash on delivery then the vendor should follow the structure of the shipping for better stock management
-# the structure is the following, as we said in case the order has been delivered successfully then the vendor should go to his dashboard
-# and he should go to the orders that been created for his product and he should go to the shipping status and adjust it to true
-
-
 class GlobalOrder(models.Model):
 
     shopping_cart = models.ForeignKey(
         ShoppingCart, on_delete=models.CASCADE, related_name="global_orders"
-    )  # i created this model in order to have one global order which has all the products the client payed and then we will create many cartorders depending ont he vendors of each product
+    )
     total_price = models.DecimalField(
         max_digits=10, decimal_places=2, null=True, blank=True
     )
     payment_method = models.CharField(
         max_length=10, choices=PAYMENT_CHOICES, default="cod"
     )
-    address = models.TextField(blank=False, null=False, default="Casablanca")
+    address = models.TextField(blank=False, null=False)
     # TODO : make sure to remove the default value of the address
     city = models.CharField(
         max_length=56,
@@ -459,11 +472,10 @@ class CartOrder(models.Model):
 
     client = models.ForeignKey(
         Client, on_delete=models.CASCADE, related_name="client_orders"
-    )  # im not deleting because i wanna keep the order object for the analysis of the vendor
+    )
     vendor = models.ForeignKey(
         Vendor, on_delete=models.CASCADE, related_name="vendor_orders", null=True
-    )  # im not deleting because i wanna keep the history of purchases for the client, null true because as far as i know after the client payed ,first it will create a cart order but it would not be related to any vendor untill we crete order cart items and then we will make sure that all of theses order cart items has the same vendor before attributing the vendor to this order
-    total_payed = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    )
     order_date = models.DateTimeField(auto_now_add=True)
     payment_method = models.CharField(
         max_length=20, choices=PAYMENT_CHOICES, default="cod"
@@ -480,6 +492,7 @@ class CartOrder(models.Model):
         default="processing",
     )
     is_active = models.BooleanField(default=True)
+    total_payed = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
     class Meta:
         verbose_name_plural = "Cart Orders"
@@ -795,3 +808,23 @@ class Testimonial(models.Model):
 
     def __str__(self):
         return f"testimonial id : {self.id}, user: {self.user.get_full_name()}"
+
+
+class ProductSize(models.Model):
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="sizes")
+    size = models.CharField(
+        max_length=20, choices=SizeChoices.choices, null=False, blank=False
+    )
+    quantity = models.PositiveIntegerField(
+        null=False, blank=False, validators=[MinValueValidator(1)]
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["product", "size"], name="unique_product_size"
+            )
+        ]
+
+    def __str__(self):
+        return f"size : {self.size} product title : {self.product.title}"

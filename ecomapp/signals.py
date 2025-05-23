@@ -344,6 +344,22 @@ def create_related_client_resources(sender, instance, created, **kwargs):
 #         raise ValidationError("this user is a staff user")
 
 
+@receiver(post_save, sender=CartOrder)
+def increment_total_sold_products(sender, instance, created, **kwargs):
+    if not created:
+        try:
+            previous_order_state = CartOrder.objects.get(pk=instance.pk)
+        except CartOrder.DoesNotExist:
+            return
+        if (
+            previous_order_state.order_status != "delivered"
+            and instance.order_status == "delivered"
+        ):
+            vendor = instance.vendor
+            vendor.total_sold += 1
+            vendor.save(update_fields=["total_sold"])
+
+
 def cancel_and_notify_delivery_agent(claimed_order: ClaimedOrder):
     claimed_order.delivery_status = "canceled"
     claimed_order.save(update_fields=["delivery_status"])

@@ -2,6 +2,12 @@ from .models import User, Vendor, Client, UserRoles, DeliveryAgent
 from rest_framework import serializers
 import json
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from ecomapp.models import ProductReview, Product, FoodProduct
+from django.db.models import Avg, Count
+from django.contrib.contenttypes.models import ContentType
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -65,6 +71,9 @@ class VendorSerializer(serializers.ModelSerializer):
     vid = serializers.ReadOnlyField()
     image_url = serializers.SerializerMethodField()
     user = UserSerializer()
+    total_sold = serializers.IntegerField(read_only=True)
+    average_reviews = serializers.SerializerMethodField()
+    reviews_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Vendor
@@ -75,16 +84,75 @@ class VendorSerializer(serializers.ModelSerializer):
             "description",
             "image",
             "country",
+            "city",
             "image_url",
             "address",
+            "total_sold",
+            "average_reviews",
+            "reviews_count",
         ]
         read_only_fields = ["vid", "image_url", "country"]
 
-    # def validate(self, data):
-    #     request = self.context["request"]
-    #     if request.user.is_authenticated:
-    #         raise serializers.ValidationError("You're already authenticated.")
-    #     return data
+    def get_average_reviews(self, obj):
+        logger.debug(f"Calculating average reviews for vendor: {obj.vid}")
+
+        # Get the ContentTypes for Product and FoodProduct
+        product_content_type = ContentType.objects.get_for_model(Product)
+        food_product_content_type = ContentType.objects.get_for_model(FoodProduct)
+
+        # Get related products and food products for the vendor
+        vendor_products = Product.objects.filter(vendor=obj)
+        food_products = FoodProduct.objects.filter(vendor=obj)
+
+        # Filter reviews for both product and food product
+        reviews_for_products = ProductReview.objects.filter(
+            content_type=product_content_type,
+            object_id__in=vendor_products.values_list("id", flat=True),
+        )
+        reviews_for_food_products = ProductReview.objects.filter(
+            content_type=food_product_content_type,
+            object_id__in=food_products.values_list("id", flat=True),
+        )
+
+        # Combine both querysets
+        all_reviews = reviews_for_products | reviews_for_food_products
+
+        if all_reviews.exists():
+            average = all_reviews.aggregate(Avg("rating"))["rating__avg"]
+            logger.debug(f"Average review for vendor {obj.vid}: {average}")
+            return average or 0.0
+
+        # No reviews found
+        logger.debug(f"No reviews found for vendor: {obj.vid}")
+        return 0.0
+
+    def get_reviews_count(self, obj):
+        logger.debug(f"Calculating reviews count for vendor: {obj.vid}")
+
+        # Get the ContentTypes for Product and FoodProduct
+        product_content_type = ContentType.objects.get_for_model(Product)
+        food_product_content_type = ContentType.objects.get_for_model(FoodProduct)
+
+        # Get related products and food products for the vendor
+        vendor_products = Product.objects.filter(vendor=obj)
+        food_products = FoodProduct.objects.filter(vendor=obj)
+
+        # Filter reviews for both product and food product
+        reviews_for_products = ProductReview.objects.filter(
+            content_type=product_content_type,
+            object_id__in=vendor_products.values_list("id", flat=True),
+        )
+        reviews_for_food_products = ProductReview.objects.filter(
+            content_type=food_product_content_type,
+            object_id__in=food_products.values_list("id", flat=True),
+        )
+
+        # Combine both querysets
+        all_reviews = reviews_for_products | reviews_for_food_products
+
+        count = all_reviews.count()
+        logger.debug(f"Review count for vendor {obj.vid}: {count}")
+        return count
 
     def validate(self, data):
         user = self.context["request"].user
@@ -95,6 +163,9 @@ class VendorSerializer(serializers.ModelSerializer):
             or hasattr(user, "delivery_agent")
         ):
             raise serializers.ValidationError("this user is already linked")
+
+        if "total_sold" in data:
+            raise serializers.ValidationError("you cannot update the total sold")
         return data
 
     def create(self, validated_data):

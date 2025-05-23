@@ -4,7 +4,8 @@ from django.utils.html import mark_safe
 from userauths.models import *
 from taggit.serializers import TaggitSerializer, TagListSerializerField
 from .helpers import is_valid_client_and_order
-from userauths.serializers import VendorSerializer, UserSerializer
+from userauths.serializers import VendorSerializer, UserSerializer, ClientSerializer
+from django.db.models import Avg
 
 
 class SectorSerializer(serializers.ModelSerializer):
@@ -48,6 +49,7 @@ class SectorSerializer(serializers.ModelSerializer):
 
 class CategorySerializer(serializers.ModelSerializer):
     image_url = serializers.SerializerMethodField()
+    sector = SectorSerializer()
 
     class Meta:
         model = Category
@@ -69,6 +71,7 @@ class CategorySerializer(serializers.ModelSerializer):
 
 class SubCategorySerializer(serializers.ModelSerializer):
     image_url = serializers.SerializerMethodField()
+    category = CategorySerializer()
 
     class Meta:
         model = SubCategory
@@ -170,7 +173,102 @@ class ProductColorSerializer(serializers.ModelSerializer):
         fields = ["color"]
 
 
+class ProductReviewSerializer(serializers.ModelSerializer):
+    content_type = serializers.SlugRelatedField(
+        slug_field="model",
+        queryset=ContentType.objects.filter(model__in=["product", "foodproduct"]),
+    )
+    client = ClientSerializer(read_only=True)
+    object_id = serializers.IntegerField()
+
+    class Meta:
+        model = ProductReview
+        fields = [
+            "id",
+            "client",
+            "content_type",
+            "object_id",
+            "comment",
+            "rating",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "client", "created_at", "updated_at"]
+
+    def validate(self, data):
+        user = self.context["request"].user
+        if not hasattr(user, "client"):
+            raise serializers.ValidationError("Only clients can review.")
+
+        model_class = data["content_type"].model_class()
+        try:
+            item = model_class.objects.get(id=data["object_id"])
+        except model_class.DoesNotExist:
+            raise serializers.ValidationError("Item does not exist.")
+
+        if ProductReview.objects.filter(
+            client=user.client,
+            content_type=data["content_type"],
+            object_id=data["object_id"],
+        ).exists():
+            raise serializers.ValidationError("You already reviewed this item.")
+
+        if not CartOrderItem.objects.filter(
+            client=user.client,
+            content_type=data["content_type"],
+            object_id=data["object_id"],
+        ).exists():
+            raise serializers.ValidationError("You must purchase before reviewing.")
+
+        return data
+
+    def update(self, instance, validated_data):
+        user = self.context["request"].user
+        if user.client != instance.client:
+            raise serializers.ValidationError("You do not own this review.")
+        return super().update(instance, validated_data)
+
+
+class ProductSizeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductSize
+        fields = ["id", "product", "size", "quantity"]
+        read_only_fields = ["id"]
+
+    def create(self, validated_data):
+        user = self.context["request"].user
+        if not hasattr(user, "vendor") and not user.is_superuser:
+            raise serializers.ValidationError(
+                "only vendors and super users that can access this resource"
+            )
+        if hasattr(user, "vendor"):
+
+            product = validated_data.get("product")
+            if product.vendor != user.vendor:
+                raise serializers.ValidationError(
+                    "you are not the owner of the product"
+                )
+
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        user = self.context["request"].user
+        if not hasattr(user, "vendor") and not user.is_superuser:
+            raise serializers.ValidationError(
+                "only vendors and super users that can access this resource"
+            )
+
+        if hasattr(user, "vendor"):
+            if instance.product.vendor != user.vendor:
+                raise serializers.ValidationError(
+                    "you are not the owner of this product size object, you cannot modify it"
+                )
+
+        return super().update(instance, validated_data)
+
+
 class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
+    sizes = ProductSizeSerializer(many=True, read_only=True)
     colors = serializers.ListField(
         child=serializers.ChoiceField(choices=ColorChoices.choices),
         required=False,
@@ -178,6 +276,7 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
     )
     color_list = serializers.SerializerMethodField(read_only=True)
     images = ProductImagesSerializer(many=True, read_only=True)
+    reviews = ProductReviewSerializer(many=True, read_only=True)
     uploaded_images = serializers.ListField(
         child=serializers.ImageField(), write_only=True, required=False
     )
@@ -185,6 +284,8 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
     tags = TagListSerializerField()
     vendor = VendorSerializer(read_only=True)
     sub_category = SubCategorySerializer()
+    average_reviews = serializers.SerializerMethodField()
+    total_reviews = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -214,6 +315,11 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             "vendor",
             "created_at",
             "updated_at",
+            "reviews",
+            "average_reviews",
+            "total_reviews",
+            "long_description",
+            "sizes",
         ]
         read_only_fields = [
             "id",
@@ -222,17 +328,18 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             "color_list",
             "images",
             "image_url",
+            "reviews",
             "created_at",
             "updated_at",
+            "sizes",
         ]
 
-    # def get_image_list(self, obj):
-    #     request = self.context.get("request")
-    #     [
-    #         request.build_absolute_uri(image.image.url)
-    #         for image in obj.images.all()
-    #         if image.image
-    #     ]
+    def get_average_reviews(self, obj):
+        average_rating = obj.reviews.all().aggregate(Avg("rating"))["rating__avg"]
+        return round(average_rating or 0.0)
+
+    def get_total_reviews(self, obj):
+        return obj.reviews.all().count()
 
     def get_color_list(self, obj):
         return list(obj.colors.values_list("color", flat=True))
@@ -281,6 +388,7 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
 
 
 class FoodProductSerializer(TaggitSerializer, serializers.ModelSerializer):
+    reviews = ProductReviewSerializer(many=True, read_only=True)
     images = FoodProductImagesSerializer(many=True, read_only=True)
     uploaded_images = serializers.ListField(
         child=serializers.ImageField(), write_only=True, required=False
@@ -288,6 +396,9 @@ class FoodProductSerializer(TaggitSerializer, serializers.ModelSerializer):
     image_url = serializers.SerializerMethodField()
     tags = TagListSerializerField()
     vendor = VendorSerializer(read_only=True)
+    sub_category = SubCategorySerializer()
+    average_reviews = serializers.SerializerMethodField()
+    total_reviews = serializers.SerializerMethodField()
 
     class Meta:
         model = FoodProduct
@@ -317,6 +428,9 @@ class FoodProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             "weight_in_grams",
             "calories",
             "is_vegan",
+            "reviews",
+            "average_reviews",
+            "total_reviews",
         ]
 
         read_only_fields = [
@@ -329,6 +443,13 @@ class FoodProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             "updated_at",
             "expired_at",
         ]
+
+    def get_average_reviews(self, obj):
+        average_reviews = obj.reviews.all().aggregate(Avg("rating"))["rating__avg"]
+        return round(average_reviews or 0.0)
+
+    def get_total_reviews(self, obj):
+        return obj.reviews.all().count()
 
     def get_image_url(self, obj):
         request = self.context.get("request")
@@ -551,61 +672,6 @@ class CartOrderItemSerializer(serializers.ModelSerializer):
         return instance
 
 
-class ProductReviewSerializer(serializers.ModelSerializer):
-    content_type = serializers.SlugRelatedField(
-        slug_field="model",
-        queryset=ContentType.objects.filter(model__in=["product", "foodproduct"]),
-    )
-    object_id = serializers.IntegerField()
-
-    class Meta:
-        model = ProductReview
-        fields = [
-            "id",
-            "client",
-            "content_type",
-            "object_id",
-            "comment",
-            "rating",
-            "created_at",
-            "updated_at",
-        ]
-        read_only_fields = ["id", "client", "created_at", "updated_at"]
-
-    def validate(self, data):
-        user = self.context["request"].user
-        if not hasattr(user, "client"):
-            raise serializers.ValidationError("Only clients can review.")
-
-        model_class = data["content_type"].model_class()
-        try:
-            item = model_class.objects.get(id=data["object_id"])
-        except model_class.DoesNotExist:
-            raise serializers.ValidationError("Item does not exist.")
-
-        if ProductReview.objects.filter(
-            client=user.client,
-            content_type=data["content_type"],
-            object_id=data["object_id"],
-        ).exists():
-            raise serializers.ValidationError("You already reviewed this item.")
-
-        if not CartOrderItem.objects.filter(
-            client=user.client,
-            content_type=data["content_type"],
-            object_id=data["object_id"],
-        ).exists():
-            raise serializers.ValidationError("You must purchase before reviewing.")
-
-        return data
-
-    def update(self, instance, validated_data):
-        user = self.context["request"].user
-        if user.client != instance.client:
-            raise serializers.ValidationError("You do not own this review.")
-        return super().update(instance, validated_data)
-
-
 class WishlistSerializer(serializers.ModelSerializer):
     products = serializers.PrimaryKeyRelatedField(
         queryset=Product.objects.all(), many=True
@@ -658,7 +724,120 @@ class ShoppingCartSerializer(serializers.ModelSerializer):
         return data
 
 
-class CartItemSerializer(serializers.ModelSerializer):
+class CartItemWriteSerializer(serializers.ModelSerializer):
+    product = serializers.PrimaryKeyRelatedField(
+        queryset=Product.objects.all(), required=False
+    )
+    food_product = serializers.PrimaryKeyRelatedField(
+        queryset=FoodProduct.objects.all(), required=False
+    )
+
+    class Meta:
+        model = CartItem
+        fields = [
+            "product",
+            "food_product",
+            "quantity",
+            "size",
+        ]
+
+    def create(self, validated_data):
+        user = self.context["request"].user
+
+        if not hasattr(user, "client") or user.is_superuser:
+            raise serializers.ValidationError(
+                {"error": "Only clients (not superusers) can create cart items."}
+            )
+
+        product = validated_data.get("product")
+        food_product = validated_data.get("food_product")
+        quantity = validated_data.get("quantity")
+
+        if (not product and not food_product) or (product and food_product):
+            raise serializers.ValidationError(
+                "You must provide either a product or a food product, but not both."
+            )
+
+        if quantity is not None and quantity < 1:
+            raise serializers.ValidationError("The quantity must be at least 1.")
+
+        client = user.client
+        shopping_cart = getattr(client, "shopping_cart", None)
+
+        if not shopping_cart:
+            raise serializers.ValidationError("This client has no shopping cart.")
+
+        product = validated_data.get("product")
+        food_product = validated_data.get("food_product")
+        quantity = validated_data.get("quantity", 1)
+
+        if product:
+            if not product.in_stock or product.quantity < quantity:
+                raise serializers.ValidationError(
+                    {"quantity": "Requested quantity exceeds product stock."}
+                )
+            if shopping_cart.cart_items.filter(
+                product=product, is_ordered=False
+            ).exists():
+                raise serializers.ValidationError(
+                    {"product": "This product is already in your cart and not ordered."}
+                )
+
+        if food_product:
+            if not food_product.in_stock or (
+                food_product.quantity and food_product.quantity < quantity
+            ):
+                raise serializers.ValidationError(
+                    {"quantity": "Requested quantity exceeds food product stock."}
+                )
+            if shopping_cart.cart_items.filter(
+                food_product=food_product, is_ordered=False
+            ).exists():
+                raise serializers.ValidationError(
+                    {
+                        "food_product": "This food product is already in your cart and not ordered."
+                    }
+                )
+
+        validated_data["shopping_cart"] = shopping_cart
+        return CartItem.objects.create(**validated_data)
+
+    def update(self, instance, validated_data):
+        user = self.context["request"].user
+
+        if not hasattr(user, "client"):
+            raise serializers.ValidationError("This user has no client account.")
+
+        if instance.is_ordered:
+            raise serializers.ValidationError("You cannot modify an ordered cart item.")
+
+        quantity = validated_data.get("quantity")
+        if quantity is None or quantity < 1:
+            raise serializers.ValidationError("Quantity must be at least 1.")
+
+        if instance.product:
+            if not instance.product.in_stock or instance.product.quantity < quantity:
+                raise serializers.ValidationError(
+                    {"product": "Product is out of stock or insufficient quantity."}
+                )
+        elif instance.food_product:
+            if not instance.food_product.in_stock or (
+                instance.food_product.quantity
+                and instance.food_product.quantity < quantity
+            ):
+                raise serializers.ValidationError(
+                    {
+                        "food_product": "Food product is out of stock or insufficient quantity."
+                    }
+                )
+
+        return super().update(instance, validated_data)
+
+
+class CartItemReadSerializer(serializers.ModelSerializer):
+    product = ProductSerializer(read_only=True)
+    food_product = FoodProductSerializer(read_only=True)
+
     class Meta:
         model = CartItem
         fields = [
@@ -670,132 +849,9 @@ class CartItemSerializer(serializers.ModelSerializer):
             "updated_at",
             "total_price",
             "is_ordered",
+            "size",
         ]
-        read_only_fields = [
-            "id",
-            "shopping_cart",
-            "created_at",
-            "updated_at",
-            "total_price",
-            "is_ordered",
-        ]
-
-    def create(self, validated_data):
-        user = self.context["request"].user
-
-        if not hasattr(user, "client") or user.is_superuser:
-            raise serializers.ValidationError(
-                {"error": "only super users or clients who can create cart items"}
-            )
-
-        client = user.client
-        product = validated_data.get("product", None)
-        food_product = validated_data.get("food_product", None)
-        quantity = validated_data.get("quantity", None)
-        if product is None and food_product is None or (product and food_product):
-            raise serializers.ValidationError(
-                "the cart item expect food product or clothing product"
-            )
-
-        if quantity < 1:
-            raise serializers.ValidationError("the quantity cannot be less than 1")
-
-        if not hasattr(client, "shopping_cart"):
-            raise serializers.ValidationError(
-                {"error": "this client has no shopping cart"}
-            )
-
-        if product:
-            if not product.in_stock or product.quantity < quantity:
-                raise serializers.ValidationError(
-                    {
-                        "quantity": "The requested quantity exceeds the available stock for the product."
-                    }
-                )
-        elif food_product:
-            if not food_product.in_stock or (
-                food_product.quantity and food_product.quantity < quantity
-            ):
-                raise serializers.ValidationError(
-                    {
-                        "quantity": "The requested quantity exceeds the available stock for the food product."
-                    }
-                )
-
-        shopping_cart = client.shopping_cart
-        if (
-            product
-            and shopping_cart.cart_items.filter(
-                product=product, is_ordered=False
-            ).exists()
-        ):
-            raise serializers.ValidationError(
-                {
-                    "product": "this product already exist in your shopping cart and it s been ordered"
-                }
-            )
-
-        elif (
-            food_product
-            and shopping_cart.cart_items.filter(
-                food_product=food_product, is_ordered=False
-            ).exists()
-        ):
-            raise serializers.ValidationError(
-                {
-                    "product": "this product already exist in your shopping cart and it s been ordered"
-                }
-            )
-
-        validated_data["shopping_cart"] = user.client.shopping_cart
-        return CartItem.objects.create(**validated_data)
-
-    def update(self, instance, validated_data):
-        user = self.context["request"].user
-
-        if not hasattr(user, "client"):
-            raise serializers.ValidationError(
-                {"error": "this user has no client account"}
-            )
-
-        allowed_fields = {"quantity"}
-
-        if not set(validated_data.keys()) - allowed_fields:
-            raise serializers.ValidationError(
-                "the only allowed field to update is quantity"
-            )
-
-        if instance.is_ordered:
-            raise serializers.ValidationError("you cannot modify an ordered cart item")
-
-        quantity = validated_data.get("quantity", None)
-        if quantity is None or quantity < 1:
-            raise serializers.ValidationError(
-                "the quantity cannot be none and it cannot be bellow then 1"
-            )
-        client = user.client
-        if not hasattr(client, "shopping_cart"):
-            raise serializers.ValidationError("this client has no shopping cart object")
-
-        if instance.product:
-            if not instance.product.in_stock or instance.product.quantity < quantity:
-                raise serializers.ValidationError(
-                    {
-                        "product": "This product is out of stock or requested quantity exceeds stock."
-                    }
-                )
-        elif instance.food_product:
-            if not instance.food_product.in_stock or (
-                instance.food_product.quantity
-                and instance.food_product.quantity < quantity
-            ):
-                raise serializers.ValidationError(
-                    {
-                        "food_product": "This food product is out of stock or requested quantity exceeds stock."
-                    }
-                )
-
-        return super().update(instance, validated_data)
+        read_only_fields = fields
 
 
 class GlobalOrderSerializer(serializers.ModelSerializer):
@@ -1306,3 +1362,10 @@ class TestimonialSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         user = self.context["request"].user
         return Testimonial.objects.create(user=user, **validated_data)
+
+
+class AiMessageSerializer(serializers.Serializer):
+    message = serializers.CharField()
+
+    class Meta:
+        fields = ["message"]
