@@ -344,6 +344,7 @@ class Wishlist(models.Model):
         Product,
         related_name="wishlists",
     )
+    food_products = models.ManyToManyField(FoodProduct, related_name="wishlists")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

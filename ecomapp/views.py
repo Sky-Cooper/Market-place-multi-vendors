@@ -327,10 +327,10 @@ class CartOrderViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if hasattr(user, "client"):
-            return CartOrder.objects.filter(client=user.client)
+            return CartOrder.objects.filter(client=user.client).order_by("-order_date")
 
         if hasattr(user, "vendor"):
-            return CartOrder.objects.filter(vendor=user.vendor)
+            return CartOrder.objects.filter(vendor=user.vendor).order_by("-order_date")
         if user.is_superuser:
             return CartOrder.objects.all()
 
@@ -338,10 +338,8 @@ class CartOrderViewSet(viewsets.ModelViewSet):
 
 
 class CartOrderItemViewSet(viewsets.ModelViewSet):
-    queryset = CartOrderItem.objects.all()
     serializer_class = CartOrderItemSerializer
-    permission_classes = [permissions.IsAuthenticated, IsVendorOrClient]
-    # logically speaking if i understand , the cartorderviewset get created after the client payed the full price it should be created multiple cartorder depending on how many different vendors , and in each cartorder it should create caartorderitems
+    permission_classes = [permissions.IsAuthenticated]
 
     def perform_create(self, serializer):
         serializer.save()
@@ -351,10 +349,14 @@ class CartOrderItemViewSet(viewsets.ModelViewSet):
         if user.is_superuser:
             return CartOrderItem.objects.all()
         if hasattr(user, "vendor"):
-            return CartOrderItem.objects.filter(order__vendor=user.vendor)
+            return CartOrderItem.objects.filter(order__vendor=user.vendor).order_by(
+                "-created_at"
+            )
 
         if hasattr(user, "client"):
-            return CartOrderItem.objects.filter(order__client=user.client)
+            return CartOrderItem.objects.filter(order__client=user.client).order_by(
+                "-created_at"
+            )
 
 
 class ProductReviewViewSet(viewsets.ModelViewSet):
@@ -380,7 +382,7 @@ class ProductReviewViewSet(viewsets.ModelViewSet):
 
 
 class WishlistViewSet(viewsets.ModelViewSet):
-    queryset = Wishlist.objects.all()
+
     serializer_class = WishlistSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -398,38 +400,113 @@ class WishlistViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("only clients who can have a wish list")
         if Wishlist.objects.filter(client=user.client).exists():
             raise ValidationError("this client has already a wishlist")
-        serializer.save()
+        serializer.save(client=user.client)
 
-    @action(detail=True, methods=["post"])
-    def add_product(self, request, pk=None):
-        wish_list = self.get_object()
-        product_id = request.data.get("product_id")
+    @action(detail=False, methods=["post"])
+    def add_product(self, request):
+        user = request.user
+
+        if not hasattr(user, "client"):
+            return Response({"detail": "Only clients can have wishlists."}, status=403)
 
         try:
-            product = Product.objects.get(id=product_id)
-        except Product.DoesNotExist:
-            raise ValidationError("a product with this id does not exist")
+            wishlist = user.client.wishlist
+        except Wishlist.DoesNotExist:
+            return Response({"detail": "Wishlist not found."}, status=404)
 
-        if not wish_list.products.filter(id=product.id).exists():
-            wish_list.products.add(product)
-            return Response({"status": "Product added to wishlist"})
-        return Response({"status": "Product already in the wishlist"})
-
-    @action(detail=True, methods=["post"])
-    def remove_product(self, request, pk=None):
-        wish_list = self.get_object()
         product_id = request.data.get("product_id")
+        food_product_id = request.data.get("food_product_id")
+
+        if not product_id and not food_product_id:
+            return Response(
+                {"detail": "Provide at least product_id or food_product_id."},
+                status=400,
+            )
+
+        response_data = {}
+
+        if product_id:
+            try:
+                product = Product.objects.get(id=product_id)
+                if not wishlist.products.filter(id=product.id).exists():
+                    wishlist.products.add(product)
+                    response_data["status"] = "Product added."
+                    response_data["product"] = ProductSerializer(
+                        product, context={"request": request}
+                    ).data
+                else:
+                    response_data["status"] = "Product already in wishlist."
+            except Product.DoesNotExist:
+                response_data["status"] = "Invalid product_id."
+
+        if food_product_id:
+            try:
+                food_product = FoodProduct.objects.get(id=food_product_id)
+                if not wishlist.food_products.filter(id=food_product.id).exists():
+                    wishlist.food_products.add(food_product)
+                    response_data["status"] = "Food product added."
+                    response_data["food_product"] = FoodProductSerializer(
+                        food_product, context={"request": request}
+                    ).data
+                else:
+                    response_data["status"] = "Food product already in wishlist."
+            except FoodProduct.DoesNotExist:
+                response_data["status"] = "Invalid food_product_id."
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"])
+    def delete_product(self, request):
+        user = request.user
+
+        if not hasattr(user, "client"):
+            return Response({"detail": "Only clients can have wishlists."}, status=403)
+
         try:
-            product = Product.objects.get(id=product_id)
-        except Product.DoesNotExist:
-            raise ValidationError("a product with this id does not exist")
+            wishlist = user.client.wishlist
+        except Wishlist.DoesNotExist:
+            return Response({"detail": "Wishlist not found."}, status=404)
 
-        if wish_list.products.filter(id=product.id).exists():
-            wish_list.products.remove(product)
-            return Response({"status": "product removed from the wishlist"})
-        return Response({"status": "Product does not exist in the wishlist"})
+        product_id = request.data.get("product_id")
+        food_product_id = request.data.get("food_product_id")
 
-        # create a wish list right after the user is signed up
+        if not product_id and not food_product_id:
+            return Response(
+                {"detail": "Provide at least product_id or food_product_id."},
+                status=400,
+            )
+
+        response_data = {}
+
+        if product_id:
+            try:
+                product = Product.objects.get(id=product_id)
+                if wishlist.products.filter(id=product.id).exists():
+                    wishlist.products.remove(product)
+                    response_data["status"] = "Product removed from wishlist."
+                    response_data["product"] = ProductSerializer(
+                        product, context={"request": request}
+                    ).data
+                else:
+                    response_data["status"] = "Product was not in wishlist."
+            except Product.DoesNotExist:
+                response_data["status"] = "Invalid product_id."
+
+        if food_product_id:
+            try:
+                food_product = FoodProduct.objects.get(id=food_product_id)
+                if wishlist.food_products.filter(id=food_product.id).exists():
+                    wishlist.food_products.remove(food_product)
+                    response_data["status"] = "Food product removed from wishlist."
+                    response_data["food_product"] = FoodProductSerializer(
+                        food_product, context={"request": request}
+                    ).data
+                else:
+                    response_data["status"] = "Food product was not in wishlist."
+            except FoodProduct.DoesNotExist:
+                response_data["status"] = "Invalid food_product_id."
+
+        return Response(response_data, status=status.HTTP_200_OK)
 
 
 class AddressViewSet(viewsets.ModelViewSet):
@@ -976,6 +1053,7 @@ class CartItemListAPIView(generics.ListAPIView):
 
 class AIProductAssistantAPIView(APIView):
     def post(self, request):
+        print("Incoming request data:", request.data)
         serializer = AiMessageSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -985,6 +1063,7 @@ class AIProductAssistantAPIView(APIView):
 
         if not response:
             return Response({"message": "No relevant subcategories found."}, status=200)
+        print(f"response of first prompt is {response} ")
 
         desired_subcategories_with_products = {}
         for subcategory in response.values():
@@ -999,23 +1078,26 @@ class AIProductAssistantAPIView(APIView):
                 {"message": "No products found for the relevant subcategories."},
                 status=200,
             )
-        print(desired_subcategories_with_products)
+        # print(desired_subcategories_with_products)
         desired_products = select_products(message, desired_subcategories_with_products)
+        # print(f"desired products are {desired_products}")
+        print(f"response of second prompt {desired_products}")
         products = []
 
         if desired_products:
-            for product_title in desired_products.values():
-
-                food_product = FoodProduct.objects.filter(title=product_title).first()
+            food_titles = desired_products.get("food_product", [])
+            for title in food_titles:
+                food_product = FoodProduct.objects.filter(title__iexact=title).first()
                 if food_product:
                     products.append(
                         FoodProductSerializer(
                             food_product, context={"request": request}
                         ).data
                     )
-                    continue
 
-                product = Product.objects.filter(title=product_title).first()
+            product_titles = desired_products.get("product", [])
+            for title in product_titles:
+                product = Product.objects.filter(title__iexact=title).first()
                 if product:
                     products.append(
                         ProductSerializer(product, context={"request": request}).data
@@ -1023,10 +1105,10 @@ class AIProductAssistantAPIView(APIView):
 
         if not products:
             return Response(
-                {"message": "No products found in the database regarding your need"},
+                {"message": "No products found in the databasse regarding your need"},
                 status=200,
             )
-        print(f"products=== {products}")
+
         response_data = {"products": products}
 
         return Response(response_data, status=200)

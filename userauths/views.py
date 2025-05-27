@@ -119,7 +119,7 @@ class ClientViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if hasattr(user, "client"):
-            return Client.objects.get(user=user)
+            return Client.objects.filter(user=user)
         if user.is_superuser:
             return Client.objects.all()
         return Client.objects.none()

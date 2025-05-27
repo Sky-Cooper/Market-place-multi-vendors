@@ -96,15 +96,15 @@ class VendorSerializer(serializers.ModelSerializer):
     def get_average_reviews(self, obj):
         logger.debug(f"Calculating average reviews for vendor: {obj.vid}")
 
-        # Get the ContentTypes for Product and FoodProduct
+    
         product_content_type = ContentType.objects.get_for_model(Product)
         food_product_content_type = ContentType.objects.get_for_model(FoodProduct)
 
-        # Get related products and food products for the vendor
+       
         vendor_products = Product.objects.filter(vendor=obj)
         food_products = FoodProduct.objects.filter(vendor=obj)
 
-        # Filter reviews for both product and food product
+        
         reviews_for_products = ProductReview.objects.filter(
             content_type=product_content_type,
             object_id__in=vendor_products.values_list("id", flat=True),
@@ -114,7 +114,7 @@ class VendorSerializer(serializers.ModelSerializer):
             object_id__in=food_products.values_list("id", flat=True),
         )
 
-        # Combine both querysets
+  
         all_reviews = reviews_for_products | reviews_for_food_products
 
         if all_reviews.exists():
@@ -122,7 +122,7 @@ class VendorSerializer(serializers.ModelSerializer):
             logger.debug(f"Average review for vendor {obj.vid}: {average}")
             return average or 0.0
 
-        # No reviews found
+  
         logger.debug(f"No reviews found for vendor: {obj.vid}")
         return 0.0
 

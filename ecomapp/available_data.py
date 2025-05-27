@@ -17,14 +17,14 @@ SUBCATEGORIES_PRODUCTS = {
         "Grilled Veggie Panini",
         "Chicken Pesto Panini",
     ],
-    "Pizza": ["Margherita Classica", "Vegan Truffle Funghi", "Margherita Classica"],
+    "Pizza": ["Margherita Classica", "Vegan Truffle Funghi"],
     "Maxi Dresses": [
         "Embroidered Ethnic Maxi Dress",
         "Striped Cotton Sleeveless Maxi Dress",
         "Black Satin Evening Maxi Dress",
         "Floral Print Boho Maxi Dress",
     ],
-    "Cargo Pants": ["Slim Fit Cargo Joggers", "Men’s Classic Fit Cargo Pants", ""],
+    "Cargo Pants": ["Slim Fit Cargo Joggers", "Men Classic Fit Cargo Pants - Khaki"],
     "Bomber Jackets": ["Vintage Olive Bomber", "Urban Navy Bomber Jacket"],
     "Zip-Up Hoodies": ["Classic Grey Zip-Up Hoodie", "Classic Grey Zip-Up Hoodie"],
     "Band T-Shirts": [

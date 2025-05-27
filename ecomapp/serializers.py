@@ -49,12 +49,18 @@ class SectorSerializer(serializers.ModelSerializer):
 
 class CategorySerializer(serializers.ModelSerializer):
     image_url = serializers.SerializerMethodField()
-    sector = SectorSerializer()
+    sector = serializers.PrimaryKeyRelatedField(queryset=Sector.objects.all())
 
     class Meta:
         model = Category
         fields = ["id", "sector", "title", "description", "image", "image_url"]
         read_only_fields = ["id", "image_url"]
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+
+        rep["sector"] = SectorSerializer(instance.sector, context=self.context).data
+        return rep
 
     def create(self, validated_data):
         user = self.context["request"].user
@@ -71,7 +77,7 @@ class CategorySerializer(serializers.ModelSerializer):
 
 class SubCategorySerializer(serializers.ModelSerializer):
     image_url = serializers.SerializerMethodField()
-    category = CategorySerializer()
+    category = serializers.PrimaryKeyRelatedField(queryset=Category.objects.all())
 
     class Meta:
         model = SubCategory
@@ -86,6 +92,13 @@ class SubCategorySerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at", "image_url"]
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep["category"] = CategorySerializer(
+            instance.category, context=self.context
+        ).data
+        return rep
 
     def create(self, validated_data):
         user = self.context["request"].user
@@ -283,9 +296,12 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
     image_url = serializers.SerializerMethodField()
     tags = TagListSerializerField()
     vendor = VendorSerializer(read_only=True)
-    sub_category = SubCategorySerializer()
+    sub_category = serializers.PrimaryKeyRelatedField(
+        queryset=SubCategory.objects.all()
+    )
     average_reviews = serializers.SerializerMethodField()
     total_reviews = serializers.SerializerMethodField()
+    sector = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Product
@@ -320,6 +336,7 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             "total_reviews",
             "long_description",
             "sizes",
+            "sector",
         ]
         read_only_fields = [
             "id",
@@ -333,6 +350,18 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             "updated_at",
             "sizes",
         ]
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep["sub_category"] = SubCategorySerializer(
+            instance.sub_category, context=self.context
+        ).data
+        return rep
+
+    def get_sector(self, obj):
+        sector = obj.sub_category.category.sector.title
+        if sector:
+            return sector
 
     def get_average_reviews(self, obj):
         average_rating = obj.reviews.all().aggregate(Avg("rating"))["rating__avg"]
@@ -396,9 +425,12 @@ class FoodProductSerializer(TaggitSerializer, serializers.ModelSerializer):
     image_url = serializers.SerializerMethodField()
     tags = TagListSerializerField()
     vendor = VendorSerializer(read_only=True)
-    sub_category = SubCategorySerializer()
+    sub_category = serializers.PrimaryKeyRelatedField(
+        queryset=SubCategory.objects.all()
+    )
     average_reviews = serializers.SerializerMethodField()
     total_reviews = serializers.SerializerMethodField()
+    sector = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = FoodProduct
@@ -431,6 +463,7 @@ class FoodProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             "reviews",
             "average_reviews",
             "total_reviews",
+            "sector",
         ]
 
         read_only_fields = [
@@ -443,6 +476,18 @@ class FoodProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             "updated_at",
             "expired_at",
         ]
+
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
+        rep["sub_category"] = SubCategorySerializer(
+            instance.sub_category, context=self.context
+        ).data
+        return rep
+
+    def get_sector(self, obj):
+        sector = obj.sub_category.category.sector.title
+        if sector:
+            return sector
 
     def get_average_reviews(self, obj):
         average_reviews = obj.reviews.all().aggregate(Avg("rating"))["rating__avg"]
@@ -480,6 +525,8 @@ class FoodProductSerializer(TaggitSerializer, serializers.ModelSerializer):
 
 
 class CartOrderSerializer(serializers.ModelSerializer):
+    vendor = VendorSerializer(read_only=True)
+
     class Meta:
         model = CartOrder
         fields = [
@@ -575,7 +622,29 @@ class CartOrderSerializer(serializers.ModelSerializer):
     #     return super().create(validated_data)
 
 
+class CartItemReadSerializer(serializers.ModelSerializer):
+    product = ProductSerializer(read_only=True)
+    food_product = FoodProductSerializer(read_only=True)
+
+    class Meta:
+        model = CartItem
+        fields = [
+            "id",
+            "product",
+            "food_product",
+            "quantity",
+            "created_at",
+            "updated_at",
+            "total_price",
+            "is_ordered",
+            "size",
+        ]
+        read_only_fields = fields
+
+
 class CartOrderItemSerializer(serializers.ModelSerializer):
+    cart_item = CartItemReadSerializer(read_only=True)
+    cart_order_status = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = CartOrderItem
@@ -589,6 +658,7 @@ class CartOrderItemSerializer(serializers.ModelSerializer):
             "is_canceled",
             "is_canceled_by_vendor",
             "is_active",
+            "cart_order_status",
         ]
         read_only_fields = [
             "id",
@@ -599,7 +669,8 @@ class CartOrderItemSerializer(serializers.ModelSerializer):
             "is_active",
         ]
 
-        # the facture and the total_price should be calculated and generated, (make sure to send the facture in the gmail , for later imporvments not now)
+    def get_cart_order_status(self, obj):
+        return obj.order.order_status
 
     def create(self, validated_data):
         user = self.context["request"].user
@@ -673,13 +744,12 @@ class CartOrderItemSerializer(serializers.ModelSerializer):
 
 
 class WishlistSerializer(serializers.ModelSerializer):
-    products = serializers.PrimaryKeyRelatedField(
-        queryset=Product.objects.all(), many=True
-    )
+    products = ProductSerializer(many=True, read_only=True)
+    food_products = FoodProductSerializer(many=True, read_only=True)
 
     class Meta:
         model = Wishlist
-        fields = ["id", "client", "products", "created_at"]
+        fields = ["id", "client", "products", "food_products", "created_at"]
         read_only_fields = ["id", "client", "created_at"]
 
     def update(self, instance, validated_data):
@@ -832,26 +902,6 @@ class CartItemWriteSerializer(serializers.ModelSerializer):
                 )
 
         return super().update(instance, validated_data)
-
-
-class CartItemReadSerializer(serializers.ModelSerializer):
-    product = ProductSerializer(read_only=True)
-    food_product = FoodProductSerializer(read_only=True)
-
-    class Meta:
-        model = CartItem
-        fields = [
-            "id",
-            "product",
-            "food_product",
-            "quantity",
-            "created_at",
-            "updated_at",
-            "total_price",
-            "is_ordered",
-            "size",
-        ]
-        read_only_fields = fields
 
 
 class GlobalOrderSerializer(serializers.ModelSerializer):
@@ -1362,6 +1412,11 @@ class TestimonialSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         user = self.context["request"].user
         return Testimonial.objects.create(user=user, **validated_data)
+
+
+from rest_framework import serializers
+from .models import Product, FoodProduct
+from .serializers import ProductSerializer, FoodProductSerializer
 
 
 class AiMessageSerializer(serializers.Serializer):

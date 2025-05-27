@@ -124,7 +124,6 @@ class Vendor(models.Model):
         null=False,
     )
 
-    # make sure to handle the feature of the shipping time , it should be added
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
