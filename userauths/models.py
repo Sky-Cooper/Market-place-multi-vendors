@@ -10,6 +10,11 @@ class MOROCCAN_CITIES_CHOICES(models.TextChoices):
     RABAT = "Rabat", "Rabat"
 
 
+class FIELD_CHOICES(models.TextChoices):
+    PRODUCTS = "Products", "Products"
+    FOOD_PRODUCTS = "Food_Products", "Food_Products"
+
+
 def user_directory_path(instance, filename):
     try:
         vid = instance.vendor.vid
@@ -54,6 +59,20 @@ class ApplicationUserManager(BaseUserManager):
 class Gender(models.TextChoices):
     MALE = "male", "Male"
     FEMALE = "female", "Female"
+
+
+class Sector(models.Model):
+    title = models.CharField(max_length=128, null=False, blank=False, unique=True)
+    description = models.TextField()
+    image = models.ImageField(upload_to="sectors/")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name_plural = "Sectors"
+
+    def __str__(self):
+        return f"sector id : {self.id} title : {self.title}"
 
 
 class User(AbstractUser):
@@ -124,13 +143,15 @@ class Vendor(models.Model):
         null=False,
     )
 
-
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     is_active = models.BooleanField(default=True)
     is_banned = models.BooleanField(default=False)
     ban_expired_at = models.DateTimeField(null=True, blank=True)
     total_sold = models.PositiveIntegerField(default=0)
+    field = models.CharField(
+        max_length=54, choices=FIELD_CHOICES.choices, null=False, blank=False
+    )
 
     @property
     def chat_response_time(self):

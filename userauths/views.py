@@ -85,6 +85,7 @@ class VendorListAPIView(generics.ListAPIView):
     queryset = Vendor.objects.all()
     serializer_class = VendorSerializer
     pagination_class = VendorPagination
+    permission_classes = [permissions.AllowAny]
     filter_backends = [
         DjangoFilterBackend,
         drf_filters.SearchFilter,

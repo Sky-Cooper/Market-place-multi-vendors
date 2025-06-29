@@ -29,6 +29,7 @@ from .serializers import (
     TestimonialSerializer,
     ProductSizeSerializer,
     AiMessageSerializer,
+    TopProductSerializer,
 )
 from rest_framework import viewsets, permissions, status
 from django.db import transaction
@@ -59,6 +60,8 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import generics, filters as drf_filters
 import os
 from .available_data import SUBCATEGORIES, SUBCATEGORIES_PRODUCTS
+from django.db.models import Count, ExpressionWrapper, DecimalField, F
+from rest_framework.permissions import IsAuthenticated
 
 
 class SectorViewSet(viewsets.ModelViewSet):
@@ -140,6 +143,121 @@ class ProductViewSet(viewsets.ModelViewSet):
             trending_product, many=True, context={"request": request}
         )
         return Response(serializer.data)
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="top-products",
+        permission_classes=[IsAuthenticated],
+    )
+    def top_products(self, request):
+
+        user = request.user
+
+        if not (hasattr(user, "vendor") or user.is_superuser):
+            raise ValidationError(
+                "only vendors or super users that can access this resource"
+            )
+
+        if user.is_superuser:
+            vendor_id = request.query_params.get("vendor")
+            if not vendor_id:
+                raise ValidationError("As a super user you must provide a vendor ID")
+
+            try:
+                vendor = Vendor.objects.get(id=vendor_id)
+            except Vendor.DoesNotExist:
+                raise ValidationError("Vendor with the provided ID does not exist")
+        else:
+            vendor = user.vendor
+
+        days = int(request.query_params.get("days", 7))
+        limit = int(request.query_params.get("limit", 10))
+
+        since_date = timezone.now() - timedelta(days=days)
+        compared_end_date = timezone.now() - timedelta(days=days)
+        compared_start_date = timezone.now() - timedelta(days=days * 2)
+
+        products = (
+            Product.objects.filter(
+                vendor=vendor,
+                cart_items__cart_order_items__order__order_status="delivered",
+                cart_items__cart_order_items__order__order_date__gte=since_date,
+            )
+            .annotate(
+                total_quantity_sold=Sum(
+                    "cart_items__quantity",
+                    filter=Q(
+                        cart_items__cart_order_items__order__order_status="delivered"
+                    )
+                    & Q(
+                        cart_items__cart_order_items__order__order_date__gte=since_date
+                    ),
+                ),
+                total_orders=Count(
+                    "cart_items__cart_order_items__order",
+                    filter=Q(
+                        cart_items__cart_order_items__order__order_status="delivered"
+                    )
+                    & Q(
+                        cart_items__cart_order_items__order__order_date__gte=since_date
+                    ),
+                    distinct=True,
+                ),
+                total_earned=ExpressionWrapper(
+                    F("price")
+                    * Sum(
+                        "cart_items__quantity",
+                        filter=Q(
+                            cart_items__cart_order_items__order__order_status="delivered"
+                        )
+                        & Q(
+                            cart_items__cart_order_items__order__order_date__gte=since_date
+                        ),
+                    ),
+                    output_field=DecimalField(),
+                ),
+            )
+            .order_by("-total_quantity_sold")[:limit]
+        )
+
+        aggregates = CartOrder.objects.filter(
+            vendor=vendor,
+            order_date__gte=since_date,
+            order_status="delivered",
+        ).aggregate(total_delivered_orders=Count("id"), total_earned=Sum("total_payed"))
+
+        total_delivered_orders = aggregates["total_delivered_orders"]
+        total_earned = aggregates["total_earned"] or 0
+
+        compared_aggregates = CartOrder.objects.filter(
+            vendor=vendor,
+            order_date__gte=compared_start_date,
+            order_date__lte=compared_end_date,
+            order_status="delivered",
+        ).aggregate(total_delivered_orders=Count("id"), total_earned=Sum("total_payed"))
+
+        compared_total_delivered_orders = compared_aggregates["total_delivered_orders"]
+        compared_total_earned = compared_aggregates["total_earned"] or 0
+
+        average_order_value = (
+            total_earned / total_delivered_orders if total_delivered_orders > 0 else 0
+        )
+
+        serializer = TopProductSerializer(
+            products, many=True, context={"request": request}
+        )
+
+        response_data = {
+            "total_delivered_orders": total_delivered_orders,
+            "products": serializer.data,
+            "total_earned": total_earned,
+            "compared_total_delivered_orders": compared_total_delivered_orders,
+            "compared_total_earned": compared_total_earned,
+            "average_order_value": average_order_value,
+        }
+
+        return Response(response_data)
 
     def get_permissions(self):
         if self.action in ["list", "retrieve", "trending_products"]:

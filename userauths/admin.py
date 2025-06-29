@@ -76,11 +76,7 @@ class CustomUserAdmin(BaseUserAdmin):
         obj.save()
 
 
-class VendorAdmin(admin.ModelAdmin):
-    list_display = ["title", "vendor_image"]
-
-
 admin.site.register(User, CustomUserAdmin)
-admin.site.register(Vendor, VendorAdmin)
+admin.site.register(Vendor)
 admin.site.register(Client)
 admin.site.register(DeliveryAgent)

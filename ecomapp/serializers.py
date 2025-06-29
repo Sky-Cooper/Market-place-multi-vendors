@@ -1424,3 +1424,22 @@ class AiMessageSerializer(serializers.Serializer):
 
     class Meta:
         fields = ["message"]
+
+
+class TopProductSerializer(serializers.Serializer):
+    total_quantity_sold = serializers.IntegerField()
+    total_orders = serializers.IntegerField()
+    total_earned = serializers.DecimalField(max_digits=10, decimal_places=2)
+
+    class Meta:
+        model = Product
+        fields = [
+            "id",
+            "price",
+            "title",
+            "image",
+            "quantity",
+            "total_quantity_sold",
+            "total_orders",
+            "total_earned",
+        ]
