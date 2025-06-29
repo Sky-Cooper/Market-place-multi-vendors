@@ -3,8 +3,11 @@ import json
 import os
 from openai import OpenAI
 import re
+from dotenv import load_dotenv
 
-DEEPSEEK_API_KEY = "sk-3a7ee5ee25384361920641460e5b2b2a"
+load_dotenv()
+
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
 
 client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
@@ -47,7 +50,6 @@ Example:
 
     message_content = response.choices[0].message.content.strip()
 
-    # Remove markdown formatting if present
     if message_content.startswith("```json"):
         message_content = re.sub(r"```json\s*|\s*```", "", message_content).strip()
 
