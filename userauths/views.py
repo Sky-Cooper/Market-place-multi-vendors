@@ -44,24 +44,41 @@ class VendorViewSet(viewsets.ModelViewSet):
     @action(
         detail=False,
         methods=["get"],
-        url_path="top-sellers",
-        permission_classes=[permissions.AllowAny],
-        authentication_classes=[],
+        url_path="me",
+        permission_classes=[permissions.IsAuthenticated],
     )
-    def top_sellers(self, request):
-        top_sellers_data = Vendor.objects.all().order_by("-total_sold")[:6]
+    def get_current_vendor(self, request):
+        user = self.request.user
 
-        serializer = self.get_serializer(
-            top_sellers_data, many=True, context={"request": request}
-        )
+        if not hasattr(user, "vendor"):
+            raise ValidationError("only vendors that can access this resource")
+
+        vendor = user.vendor
+
+        serializer = self.get_serializer(vendor, context={"request": request})
+
         return Response(serializer.data)
+
+    def get_queryset(self):
+        user = self.request.user
+
+        if not (hasattr(user, "vendor") or user.is_superuser):
+            raise ValidationError(
+                "only vendors and super users who can access this resource"
+            )
+
+        if user.is_superuser:
+            return Vendor.objects.all()
+
+        if hasattr(user, "vendor"):
+            return Vendor.objects.filter(user=user)
+
+        return Vendor.objects.none()
 
     def get_permissions(self):
         if self.action in ["list", "retrieve", "create", "top_sellers"]:
             return [permissions.AllowAny()]
         return [permissions.IsAuthenticated()]
-
-    # TODO : make sure the second allow any to be is authenticated)
 
     def perform_create(self, serializer):
         if hasattr(self.request.user, "vendor"):

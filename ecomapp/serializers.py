@@ -1443,3 +1443,28 @@ class TopProductSerializer(serializers.Serializer):
             "total_orders",
             "total_earned",
         ]
+
+
+class SalesOverTimeSerializer(serializers.Serializer):
+
+    class Meta:
+        model = CartOrder
+        fields = ["id", "order_date", "total_payed"]
+
+
+class TopFoodProductsSerializer(serializers.Serializer):
+    total_quantity_sold = serializers.IntegerField()
+    total_orders = serializers.IntegerField()
+    total_earned = serializers.DecimalField(max_digits=10, decimal_places=2)
+
+    class Meta:
+        model = FoodProduct
+        fields = [
+            "id",
+            "price",
+            "title",
+            "image",
+            "total_quantity_sold",
+            "total_earned",
+            "total_orders",
+        ]

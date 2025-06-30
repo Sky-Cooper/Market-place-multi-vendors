@@ -30,7 +30,10 @@ from .serializers import (
     ProductSizeSerializer,
     AiMessageSerializer,
     TopProductSerializer,
+    SalesOverTimeSerializer,
+    TopFoodProductsSerializer,
 )
+from collections import defaultdict
 from rest_framework import viewsets, permissions, status
 from django.db import transaction
 from datetime import datetime, timedelta
@@ -146,7 +149,7 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     @action(
         detail=False,
-        methods=["get"],
+        methods=["post"],
         url_path="top-products",
         permission_classes=[IsAuthenticated],
     )
@@ -171,13 +174,17 @@ class ProductViewSet(viewsets.ModelViewSet):
         else:
             vendor = user.vendor
 
-        days = int(request.query_params.get("days", 7))
-        limit = int(request.query_params.get("limit", 10))
+        if vendor.field == "Food_Products":
+            raise ValidationError(
+                "this endpoint is for products and the vendor publishes food products"
+            )
+
+        days = int(request.data.get("days", 7))
+        limit = int(request.data.get("limit", 10))
 
         since_date = timezone.now() - timedelta(days=days)
-        compared_end_date = timezone.now() - timedelta(days=days)
-        compared_start_date = timezone.now() - timedelta(days=days * 2)
-
+        compared_end_date = since_date
+        compared_start_date = since_date - timedelta(days=days)
         products = (
             Product.objects.filter(
                 vendor=vendor,
@@ -243,6 +250,114 @@ class ProductViewSet(viewsets.ModelViewSet):
         average_order_value = (
             total_earned / total_delivered_orders if total_delivered_orders > 0 else 0
         )
+        compared_average_order_value = (
+            compared_total_earned / compared_total_delivered_orders
+            if compared_total_delivered_orders > 0
+            else 0
+        )
+
+        top_category = (
+            Category.objects.filter(
+                sub_categories__products__vendor=vendor,
+                sub_categories__products__cart_items__cart_order_items__order__order_status="delivered",
+                sub_categories__products__cart_items__cart_order_items__order__order_date__gte=since_date,
+            )
+            .annotate(
+                total_sold=Sum(
+                    "sub_categories__products__cart_items__quantity",
+                    filter=Q(
+                        sub_categories__products__cart_items__cart_order_items__order__order_status="delivered"
+                    )
+                    & Q(
+                        sub_categories__products__cart_items__cart_order_items__order__order_date__gte=since_date
+                    ),
+                ),
+                total_earned=Sum(
+                    ExpressionWrapper(
+                        F("sub_categories__products__cart_items__quantity")
+                        * F("sub_categories__products__price"),
+                        output_field=DecimalField(),
+                    ),
+                    filter=Q(
+                        sub_categories__products__cart_items__cart_order_items__order__order_status="delivered"
+                    )
+                    & Q(
+                        sub_categories__products__cart_items__cart_order_items__order__order_date__gte=since_date
+                    ),
+                ),
+            )
+            .order_by("-total_sold")
+            .first()
+        )
+
+        total_quantity_sold_based_on_limit = sum(
+            [p.total_quantity_sold for p in products]
+        )
+        top_category_percentage = (
+            (top_category.total_sold / total_quantity_sold_based_on_limit) * 100
+            if total_quantity_sold_based_on_limit > 0
+            else 0
+        )
+
+        sales_over_time = CartOrder.objects.filter(
+            vendor=vendor,
+            order_status="delivered",
+            order_date__gte=since_date,
+        )
+
+        sales_over_time_serializer = SalesOverTimeSerializer(
+            sales_over_time, many=True, context={"request": request}
+        )
+
+        category_sales = (
+            Category.objects.filter(
+                sub_categories__products__vendor=vendor,
+                sub_categories__products__cart_items__cart_order_items__order__order_status="delivered",
+                sub_categories__products__cart_items__cart_order_items__order__order_date__gte=since_date,
+            )
+            .annotate(
+                total_sold=Sum(
+                    "sub_categories__products__cart_items__quantity",
+                    filter=Q(
+                        sub_categories__products__cart_items__cart_order_items__order__order_status="delivered",
+                    )
+                    & Q(
+                        sub_categories__products__cart_items__cart_order_items__order__order_date__gte=since_date
+                    ),
+                )
+            )
+            .values("title", "total_sold")
+        )
+
+        total_quantity_sold = sum(cat["total_sold"] or 0 for cat in category_sales)
+
+        raw_distribution = [
+            {
+                "category": cat["title"],
+                "percentage": (
+                    round((cat["total_sold"] / total_quantity_sold) * 100, 2)
+                    if total_quantity_sold
+                    else 0
+                ),
+            }
+            for cat in category_sales
+        ]
+
+        main_cats = []
+
+        others_percentage = 0
+
+        for cat in raw_distribution:
+            if cat["percentage"] >= 8:
+                main_cats.append(cat)
+
+            else:
+                others_percentage += cat["percentage"]
+
+        if others_percentage > 0:
+            main_cats.append(
+                {"category": "Others", "percentage": round(others_percentage, 2)}
+            )
 
         serializer = TopProductSerializer(
             products, many=True, context={"request": request}
@@ -255,6 +370,15 @@ class ProductViewSet(viewsets.ModelViewSet):
             "compared_total_delivered_orders": compared_total_delivered_orders,
             "compared_total_earned": compared_total_earned,
             "average_order_value": average_order_value,
+            "compared_average_order_value": compared_average_order_value,
+            "top_category": {
+                "title": top_category.title if top_category else None,
+                "total_sold": top_category.total_sold if top_category else 0,
+                "total_earned": top_category.total_earned if top_category else 0,
+                "percentage": top_category_percentage,
+            },
+            "sales_over_time": sales_over_time_serializer.data,
+            "product_distribution_on_categories": main_cats,
         }
 
         return Response(response_data)
@@ -341,6 +465,246 @@ class FoodProductViewSet(viewsets.ModelViewSet):
             trending_food_product, many=True, context={"request": request}
         )
         return Response(serializer.data)
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="top-food-products",
+        permission_classes=[IsAuthenticated],
+    )
+    def top_food_products(self, request):
+
+        user = request.user
+
+        if not (hasattr(user, "vendor") or user.is_superuser):
+            raise ValidationError(
+                "only vendors or super users that can access this resource"
+            )
+
+        if user.is_superuser:
+            vendor_id = request.query_params.get("vendor")
+
+            if not vendor_id:
+                raise ValidationError("As a super user you must provide the vendor ID")
+
+            try:
+                vendor = Vendor.objects.get(id=vendor_id)
+
+            except Vendor.DoesNotExist:
+                raise ValidationError("vendor with the provided ID does not exist")
+
+        else:
+            vendor = user.vendor
+
+        if vendor.field == "Products":
+            raise ValidationError(
+                "this endpoint is for food products and the vendor publishes products"
+            )
+
+        days = int(request.data.get("days", 7))
+        limit = int(request.data.get("limit", 10))
+
+        since_date = timezone.now() - timedelta(days=days)
+
+        compared_end_date = since_date
+        compared_start_date = since_date - timedelta(days=days)
+
+        food_products = (
+            FoodProduct.objects.filter(
+                vendor=vendor,
+                cart_items__cart_order_items__order__order_status="delivered",
+                cart_items__cart_order_items__order__order_date__gte=since_date,
+            )
+            .annotate(
+                total_quantity_sold=Sum(
+                    "cart_items__quantity",
+                    filter=Q(
+                        cart_items__cart_order_items__order__order_status="delivered"
+                    )
+                    & Q(
+                        cart_items__cart_order_items__order__order_date__gte=since_date
+                    ),
+                ),
+                total_orders=Count(
+                    "cart_items__cart_order_items__order",
+                    filter=Q(
+                        cart_items__cart_order_items__order__order_status="delivered"
+                    )
+                    & Q(
+                        cart_items__cart_order_items__order__order_date__gte=since_date
+                    ),
+                    distinct=True,
+                ),
+                total_earned=ExpressionWrapper(
+                    F("price")
+                    * Sum(
+                        "cart_items__quantity",
+                        filter=Q(
+                            cart_items__cart_order_items__order__order_status="delivered"
+                        )
+                        & Q(
+                            cart_items__cart_order_items__order__order_date__gte=since_date
+                        ),
+                    ),
+                    output_field=DecimalField(),
+                ),
+            )
+            .order_by("-total_quantity_sold")[:limit]
+        )
+
+        aggregates = CartOrder.objects.filter(
+            vendor=vendor,
+            order_date__gte=since_date,
+            order_status="delivered",
+        ).aggregate(total_delivered_orders=Count("id"), total_earned=Sum("total_payed"))
+
+        total_delivered_orders = aggregates["total_delivered_orders"]
+        total_earned = aggregates["total_earned"]
+
+        compared_aggregates = CartOrder.objects.filter(
+            vendor=vendor,
+            order_date__gte=compared_start_date,
+            order_date__lte=compared_end_date,
+            order_status="delivered",
+        ).aggregate(total_delivered_orders=Count("id"), total_earned=Sum("total_payed"))
+
+        compared_total_delivered_orders = compared_aggregates["total_delivered_orders"]
+        compared_total_earned = compared_aggregates["total_earned"]
+
+        average_order_value = (
+            total_earned / total_delivered_orders if total_delivered_orders > 0 else 0
+        )
+
+        compared_average_order_value = (
+            compared_total_earned / compared_total_delivered_orders
+            if compared_total_delivered_orders > 0
+            else 0
+        )
+
+        top_category = (
+            Category.objects.filter(
+                sub_categories__products__vendor=vendor,
+                sub_categories__products__cart_items__cart_order_items__order__order_status="delivered",
+                sub_categories__products__cart_items__cart_order_items__order__order_date__gte=since_date,
+            )
+            .annotate(
+                total_sold=Sum(
+                    "sub_categories__products__cart_items__quantity",
+                    filter=Q(
+                        sub_categories__products__cart_items__cart_order_items__order__order_status="delivered"
+                    )
+                    & Q(
+                        sub_categories__products__cart_items__cart_order_items__order__order_date__gte=since_date
+                    ),
+                ),
+                total_earned=Sum(
+                    ExpressionWrapper(
+                        F("sub_categories__products__price")
+                        * F("sub_categories__products__cart_items__quantity"),
+                        output_field=DecimalField(),
+                    ),
+                    filter=Q(
+                        sub_categories__products__cart_items__cart_order_items__order__order_status="delivered",
+                    )
+                    & Q(
+                        sub_categories__products__cart_items__cart_order_items__order__order_date__gte=since_date
+                    ),
+                ),
+            )
+            .order_by("-total_sold")
+            .first()
+        )
+
+        total_quantity_sold_based_on_limit = sum(
+            [p.total_quantity_sold for p in food_products]
+        )
+        top_category_percentage = (
+            (top_category.total_sold / total_quantity_sold_based_on_limit) * 100
+            if total_quantity_sold_based_on_limit > 0
+            else 0
+        )
+
+        sales_over_time = CartOrder.objects.filter(
+            vendor=vendor,
+            order_status="delivered",
+            order_date__gte=since_date,
+        )
+
+        sales_over_time_serializer = SalesOverTimeSerializer(
+            sales_over_time, many=True, context={"request": request}
+        )
+
+        category_sales = (
+            Category.objects.filter(
+                sub_categories__products__vendor=vendor,
+                sub_categories__products__cart_items__cart_order_items__order__order_status="delivered",
+                sub_categories__products__cart_items__cart_order_items__order__order_date__gte=since_date,
+            )
+            .annotate(
+                total_sold=Sum(
+                    "sub_categories__products__cart_items__quantity",
+                    filter=Q(
+                        sub_categories__products__cart_items__cart_order_items__order__order_status="delivered"
+                    )
+                    & Q(
+                        sub_categories__products__cart_items__cart_order_items__order__order_date__gte=since_date
+                    ),
+                )
+            )
+            .values("title", "total_sold")
+        )
+
+        total_quantity_sold = sum(c["total_sold"] or 0 for c in category_sales)
+
+        raw_distribution = [
+            {
+                "category": cat["title"],
+                "percentage": (
+                    round((cat["total_sold"] / total_quantity_sold) * 100, 2)
+                    if total_quantity_sold
+                    else 0
+                ),
+            }
+            for cat in category_sales
+        ]
+
+        main_cats = []
+        others_percentage = 0
+        for cat in raw_distribution:
+            if cat["percentage"] >= 8:
+                main_cats.append(cat)
+
+            else:
+                others_percentage += cat["percentage"]
+
+        if others_percentage > 0:
+            main_cats.append(
+                {"category": "Others", "percentage": round(others_percentage, 2)}
+            )
+
+        serializer = TopFoodProductsSerializer(
+            food_products, many=True, context={"request": request}
+        )
+
+        response_data = {
+            "total_delivered_orders": total_delivered_orders,
+            "food_products": serializer.data,
+            "total_earned": total_earned,
+            "compared_total_delivered_orders": compared_total_delivered_orders,
+            "comapred_total_earned": compared_total_earned,
+            "average_order_value": average_order_value,
+            "comapred_average_order_value": compared_average_order_value,
+            "top_category": {
+                "title": top_category.title if top_category else None,
+                "total_sold": top_category.total_sold if top_category else 0,
+                "total_earned": top_category.total_earned if top_category else 0,
+                "percentage": top_category_percentage,
+            },
+            "sales_over_time": sales_over_time_serializer.data,
+            "food_products_distribution_on_categories": main_cats,
+        }
+
+        return Response(response_data)
 
     def get_permissions(self):
         if self.action in ["list", "retrieve", "trending_food_products"]:
@@ -1082,7 +1446,7 @@ class ProductListAPIView(generics.ListAPIView):
 
 class FoodProductListAPIView(generics.ListAPIView):
     queryset = FoodProduct.objects.filter(is_active=True).select_related(
-        "sub_category__category__sector", "vendor"
+        "sub_categories__category__sector", "vendor"
     )
     serializer_class = FoodProductSerializer
     pagination_class = ProductPagination
@@ -1196,9 +1560,9 @@ class AIProductAssistantAPIView(APIView):
                 {"message": "No products found for the relevant subcategories."},
                 status=200,
             )
-        # print(desired_subcategories_with_products)
+
         desired_products = select_products(message, desired_subcategories_with_products)
-        # print(f"desired products are {desired_products}")
+
         print(f"response of second prompt {desired_products}")
         products = []
 
