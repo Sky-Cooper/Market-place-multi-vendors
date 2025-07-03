@@ -61,20 +61,6 @@ class Gender(models.TextChoices):
     FEMALE = "female", "Female"
 
 
-class Sector(models.Model):
-    title = models.CharField(max_length=128, null=False, blank=False, unique=True)
-    description = models.TextField()
-    image = models.ImageField(upload_to="sectors/")
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        verbose_name_plural = "Sectors"
-
-    def __str__(self):
-        return f"sector id : {self.id} title : {self.title}"
-
-
 class User(AbstractUser):
     uid = ShortUUIDField(unique=True, length=10, max_length=20, prefix="u_")
     email = models.EmailField(unique=True, blank=False)

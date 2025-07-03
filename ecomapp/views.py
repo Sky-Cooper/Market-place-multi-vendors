@@ -32,6 +32,7 @@ from .serializers import (
     TopProductSerializer,
     SalesOverTimeSerializer,
     TopFoodProductsSerializer,
+    StockAlertSerializer,
 )
 from collections import defaultdict
 from rest_framework import viewsets, permissions, status
@@ -63,7 +64,16 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import generics, filters as drf_filters
 import os
 from .available_data import SUBCATEGORIES, SUBCATEGORIES_PRODUCTS
-from django.db.models import Count, ExpressionWrapper, DecimalField, F
+from django.db.models import (
+    Count,
+    ExpressionWrapper,
+    DecimalField,
+    F,
+    Value,
+    Subquery,
+    OuterRef,
+    FloatField,
+)
 from rest_framework.permissions import IsAuthenticated
 
 
@@ -99,6 +109,7 @@ class CategoryViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if not user.is_superuser:
             raise ValidationError("only super users who can create categories")
+        print("Validated data", serializer.validated_data)
         serializer.save()
 
     def perform_update(self, serializer):
@@ -163,7 +174,7 @@ class ProductViewSet(viewsets.ModelViewSet):
             )
 
         if user.is_superuser:
-            vendor_id = request.query_params.get("vendor")
+            vendor_id = request.data.get("vendor")
             if not vendor_id:
                 raise ValidationError("As a super user you must provide a vendor ID")
 
@@ -235,7 +246,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         ).aggregate(total_delivered_orders=Count("id"), total_earned=Sum("total_payed"))
 
         total_delivered_orders = aggregates["total_delivered_orders"]
-        total_earned = aggregates["total_earned"] or 0
+        total_earned = (aggregates["total_earned"] or 0) - (total_delivered_orders * 20)
 
         compared_aggregates = CartOrder.objects.filter(
             vendor=vendor,
@@ -303,10 +314,23 @@ class ProductViewSet(viewsets.ModelViewSet):
             vendor=vendor,
             order_status="delivered",
             order_date__gte=since_date,
+        ).annotate(
+            total_earned=ExpressionWrapper(
+                F("total_payed") - Value(20),
+                output_field=DecimalField(max_digits=10, decimal_places=2),
+            )
         )
+        for order in sales_over_time:
+            print("Order ID:", order.id)
+            print("Total Payed:", order.total_payed)
+            print("Total Earned:", getattr(order, "total_earned", "❌ NOT SET"))
 
         sales_over_time_serializer = SalesOverTimeSerializer(
             sales_over_time, many=True, context={"request": request}
+        )
+        print(
+            "heree is teh serializerd data of ssales over time",
+            sales_over_time_serializer.data,
         )
 
         category_sales = (
@@ -362,26 +386,115 @@ class ProductViewSet(viewsets.ModelViewSet):
         serializer = TopProductSerializer(
             products, many=True, context={"request": request}
         )
+        serialized_products = serializer.data
 
         response_data = {
-            "total_delivered_orders": total_delivered_orders,
-            "products": serializer.data,
-            "total_earned": total_earned,
-            "compared_total_delivered_orders": compared_total_delivered_orders,
-            "compared_total_earned": compared_total_earned,
-            "average_order_value": average_order_value,
-            "compared_average_order_value": compared_average_order_value,
+            "orders": {
+                "total_delivered_orders": total_delivered_orders,
+                "compared_total_delivered_orders": compared_total_delivered_orders,
+            },
+            "earnings": {
+                "total_earned": total_earned,
+                "compared_total_earned": compared_total_earned,
+            },
+            "AOV": {
+                "average_order_value": average_order_value,
+                "compared_average_order_value": compared_average_order_value,
+            },
             "top_category": {
                 "title": top_category.title if top_category else None,
                 "total_sold": top_category.total_sold if top_category else 0,
                 "total_earned": top_category.total_earned if top_category else 0,
                 "percentage": top_category_percentage,
             },
+            "products": serialized_products,
             "sales_over_time": sales_over_time_serializer.data,
             "product_distribution_on_categories": main_cats,
         }
 
         return Response(response_data)
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="stock-alert",
+        permission_classes=[IsAuthenticated],
+    )
+    def stock_alert(self, request):
+        user = request.user
+
+        if not (hasattr(user, "vendor") or user.is_superuser):
+            raise ValidationError(
+                "only vendors or super users that can access this resource"
+            )
+
+        if user.is_superuser:
+            vendor_id = request.data.get("vendor")
+            if not vendor_id:
+                raise ValidationError(
+                    "as a super user you have to provide the vendor id"
+                )
+
+            try:
+                vendor = Vendor.objects.get(id, vendor_id)
+
+            except Vendor.DoesNotExist:
+                raise ValidationError(
+                    "a vendor with this id does not exist in the database"
+                )
+
+        else:
+            vendor = user.vendor
+
+        if vendor.field == "Food_Products":
+            raise ValidationError(
+                "this endpoint is for products and the vendor publishes food products"
+            )
+
+        days = int(request.data.get("days", 30))
+        limit = int(request.data.get("limit", 10))
+        print(f"days is here {days}")
+
+        since_date = timezone.now() - timedelta(days=days)
+
+        latest_order_date_subquery = Subquery(
+            CartOrderItem.objects.filter(cart_item__product=OuterRef("pk"))
+            .order_by("-created_at")
+            .values("created_at")[:1]
+        )
+
+        products = (
+            Product.objects.filter(vendor=vendor)
+            .annotate(
+                total_sold=Sum(
+                    "cart_items__quantity",
+                    filter=Q(
+                        cart_items__cart_order_items__order__order_status="delivered"
+                    )
+                    & Q(
+                        cart_items__cart_order_items__order__order_date__gte=since_date
+                    ),
+                ),
+            )
+            .annotate(
+                average_sales=ExpressionWrapper(
+                    F("total_sold") / Value(days), output_field=FloatField()
+                ),
+            )
+            .annotate(
+                days_left=ExpressionWrapper(
+                    F("quantity") / F("average_sales") + Value(0.01),
+                    output_field=FloatField(),
+                ),
+                last_order_date=latest_order_date_subquery,
+            )
+            .order_by("-total_sold")[:limit]
+        )
+
+        serializer = StockAlertSerializer(
+            products, many=True, context={"request": request}
+        )
+        return Response(serializer.data)
 
     def get_permissions(self):
         if self.action in ["list", "retrieve", "trending_products"]:
@@ -687,13 +800,19 @@ class FoodProductViewSet(viewsets.ModelViewSet):
         )
 
         response_data = {
-            "total_delivered_orders": total_delivered_orders,
+            "orders": {
+                "total_delivered_orders": total_delivered_orders,
+                "compared_total_delivered_orders": compared_total_delivered_orders,
+            },
+            "earnings": {
+                "total_earned": total_earned,
+                "compared_total_earned": compared_total_earned,
+            },
+            "AOV": {
+                "average_order_value": average_order_value,
+                "compared_average_order_value": compared_average_order_value,
+            },
             "food_products": serializer.data,
-            "total_earned": total_earned,
-            "compared_total_delivered_orders": compared_total_delivered_orders,
-            "comapred_total_earned": compared_total_earned,
-            "average_order_value": average_order_value,
-            "comapred_average_order_value": compared_average_order_value,
             "top_category": {
                 "title": top_category.title if top_category else None,
                 "total_sold": top_category.total_sold if top_category else 0,

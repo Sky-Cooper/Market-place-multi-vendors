@@ -8,6 +8,13 @@ from userauths.serializers import VendorSerializer, UserSerializer, ClientSerial
 from django.db.models import Avg
 
 
+class StockAlertChoices(models.TextChoices):
+    OUT_OF_STOCK = "OUT OF STOCK", "out of stock"
+    LOW = "LOW", "low"
+    OVER_STOCK = "OVER STOCK", "over stock"
+    HEALTHY = "HEALTHY", "healthy"
+
+
 class SectorSerializer(serializers.ModelSerializer):
     image_url = serializers.SerializerMethodField()
 
@@ -56,19 +63,20 @@ class CategorySerializer(serializers.ModelSerializer):
         fields = ["id", "sector", "title", "description", "image", "image_url"]
         read_only_fields = ["id", "image_url"]
 
+    def create(self, validated_data):
+        user = self.context["request"].user
+        if not user.is_superuser:
+            raise serializers.ValidationError(
+                "Only superusers can access this resource"
+            )
+
+        return super().create(validated_data)
+
     def to_representation(self, instance):
         rep = super().to_representation(instance)
 
         rep["sector"] = SectorSerializer(instance.sector, context=self.context).data
         return rep
-
-    def create(self, validated_data):
-        user = self.context["request"].user
-        if not user.is_superuser:
-            raise serializers.ValidationError(
-                "only super users who can access this resource"
-            )
-        return super().create(validated_data)
 
     def get_image_url(self, obj):
         request = self.context.get("request")
@@ -1426,7 +1434,7 @@ class AiMessageSerializer(serializers.Serializer):
         fields = ["message"]
 
 
-class TopProductSerializer(serializers.Serializer):
+class TopProductSerializer(serializers.ModelSerializer):
     total_quantity_sold = serializers.IntegerField()
     total_orders = serializers.IntegerField()
     total_earned = serializers.DecimalField(max_digits=10, decimal_places=2)
@@ -1445,14 +1453,19 @@ class TopProductSerializer(serializers.Serializer):
         ]
 
 
-class SalesOverTimeSerializer(serializers.Serializer):
+class SalesOverTimeSerializer(serializers.ModelSerializer):
+    total_earned = serializers.SerializerMethodField()
+
+    def get_total_earned(self, obj):
+
+        return getattr(obj, "total_earned", None)
 
     class Meta:
         model = CartOrder
-        fields = ["id", "order_date", "total_payed"]
+        fields = ["id", "order_date", "total_payed", "total_earned"]
 
 
-class TopFoodProductsSerializer(serializers.Serializer):
+class TopFoodProductsSerializer(serializers.ModelSerializer):
     total_quantity_sold = serializers.IntegerField()
     total_orders = serializers.IntegerField()
     total_earned = serializers.DecimalField(max_digits=10, decimal_places=2)
@@ -1468,3 +1481,41 @@ class TopFoodProductsSerializer(serializers.Serializer):
             "total_earned",
             "total_orders",
         ]
+
+
+class StockAlertSerializer(serializers.ModelSerializer):
+    stock_status = serializers.SerializerMethodField()
+    is_alert = serializers.SerializerMethodField()
+
+    average_sales = serializers.FloatField()
+    days_left = serializers.FloatField()
+    total_sold = serializers.IntegerField()
+    last_order_date = serializers.DateTimeField()
+
+    class Meta:
+        model = Product
+        fields = [
+            "id",
+            "title",
+            "image",
+            "price",
+            "quantity",
+            "stock_status",
+            "total_sold",
+            "average_sales",
+            "days_left",
+            "last_order_date",
+            "is_alert",
+        ]
+
+    def get_stock_status(self, obj):
+        if obj.quantity == 0:
+            return StockAlertChoices.OUT_OF_STOCK
+        elif obj.quantity <= 5:
+            return StockAlertChoices.LOW
+        elif obj.quantity >= 100:
+            return StockAlertChoices.OVER_STOCK
+        return StockAlertChoices.HEALTHY
+
+    def get_is_alert(self, obj):
+        return obj.quantity <= 10 and obj.average_sales > 1
